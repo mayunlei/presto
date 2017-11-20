@@ -368,6 +368,11 @@ public class StripeReader
         }
     }
 
+    static boolean isIndexStream(Stream stream)
+    {
+        return stream.getStreamKind() == ROW_INDEX || stream.getStreamKind() == DICTIONARY_COUNT || stream.getStreamKind() == BLOOM_FILTER;
+    }
+
     private Map<Integer, List<HiveBloomFilter>> readBloomFilterIndexes(Map<StreamId, Stream> streams, Map<StreamId, OrcInputStream> streamsData)
             throws IOException
     {
@@ -444,11 +449,6 @@ public class StripeReader
         return statistics.build();
     }
 
-    private static boolean isIndexStream(Stream stream)
-    {
-        return stream.getStreamKind() == ROW_INDEX || stream.getStreamKind() == DICTIONARY_COUNT || stream.getStreamKind() == BLOOM_FILTER;
-    }
-
     private static boolean isDictionary(Stream stream, ColumnEncodingKind columnEncoding)
     {
         return stream.getStreamKind() == DICTIONARY_DATA || (stream.getStreamKind() == LENGTH && (columnEncoding == DICTIONARY || columnEncoding == DICTIONARY_V2));
@@ -460,7 +460,10 @@ public class StripeReader
         long stripeOffset = 0;
         for (Stream stream : streams) {
             int streamLength = toIntExact(stream.getLength());
-            streamDiskRanges.put(new StreamId(stream), new DiskRange(stripeOffset, streamLength));
+            // ignore zero byte streams
+            if (streamLength > 0) {
+                streamDiskRanges.put(new StreamId(stream), new DiskRange(stripeOffset, streamLength));
+            }
             stripeOffset += streamLength;
         }
         return streamDiskRanges.build();

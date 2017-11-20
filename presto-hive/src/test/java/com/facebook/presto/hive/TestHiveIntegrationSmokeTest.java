@@ -52,6 +52,7 @@ import static com.facebook.presto.hive.HiveQueryRunner.HIVE_CATALOG;
 import static com.facebook.presto.hive.HiveQueryRunner.TPCH_SCHEMA;
 import static com.facebook.presto.hive.HiveQueryRunner.createBucketedSession;
 import static com.facebook.presto.hive.HiveQueryRunner.createQueryRunner;
+import static com.facebook.presto.hive.HiveSessionProperties.RCFILE_OPTIMIZED_WRITER_ENABLED;
 import static com.facebook.presto.hive.HiveTableProperties.BUCKETED_BY_PROPERTY;
 import static com.facebook.presto.hive.HiveTableProperties.BUCKET_COUNT_PROPERTY;
 import static com.facebook.presto.hive.HiveTableProperties.PARTITIONED_BY_PROPERTY;
@@ -237,12 +238,14 @@ public class TestHiveIntegrationSmokeTest
                 ", _partition_smallint SMALLINT" +
                 ", _partition_integer INTEGER" +
                 ", _partition_bigint BIGINT" +
+                ", _partition_boolean BOOLEAN" +
                 ", _partition_decimal_short DECIMAL(3,2)" +
                 ", _partition_decimal_long DECIMAL(30,10)" +
+                ", _partition_date DATE" +
                 ") " +
                 "WITH (" +
                 "format = '" + storageFormat + "', " +
-                "partitioned_by = ARRAY[ '_partition_string', '_partition_varchar', '_partition_char', '_partition_tinyint', '_partition_smallint', '_partition_integer', '_partition_bigint', '_partition_decimal_short', '_partition_decimal_long' ]" +
+                "partitioned_by = ARRAY[ '_partition_string', '_partition_varchar', '_partition_char', '_partition_tinyint', '_partition_smallint', '_partition_integer', '_partition_bigint', '_partition_boolean', '_partition_decimal_short', '_partition_decimal_long', '_partition_date']" +
                 ") ";
 
         if (storageFormat == HiveStorageFormat.AVRO) {
@@ -255,7 +258,18 @@ public class TestHiveIntegrationSmokeTest
         TableMetadata tableMetadata = getTableMetadata(catalog, TPCH_SCHEMA, "test_partitioned_table");
         assertEquals(tableMetadata.getMetadata().getProperties().get(STORAGE_FORMAT_PROPERTY), storageFormat);
 
-        List<String> partitionedBy = ImmutableList.of("_partition_string", "_partition_varchar", "_partition_char", "_partition_tinyint", "_partition_smallint", "_partition_integer", "_partition_bigint", "_partition_decimal_short", "_partition_decimal_long");
+        List<String> partitionedBy = ImmutableList.of(
+                "_partition_string",
+                "_partition_varchar",
+                "_partition_char",
+                "_partition_tinyint",
+                "_partition_smallint",
+                "_partition_integer",
+                "_partition_bigint",
+                "_partition_boolean",
+                "_partition_decimal_short",
+                "_partition_decimal_long",
+                "_partition_date");
         assertEquals(tableMetadata.getMetadata().getProperties().get(PARTITIONED_BY_PROPERTY), partitionedBy);
         for (ColumnMetadata columnMetadata : tableMetadata.getColumns()) {
             boolean partitionKey = partitionedBy.contains(columnMetadata.getName());
@@ -292,8 +306,10 @@ public class TestHiveIntegrationSmokeTest
                 ", CAST(1 AS SMALLINT) _partition_smallint" +
                 ", 1 _partition_integer" +
                 ", CAST (1 AS BIGINT) _partition_bigint" +
+                ", true _partition_boolean" +
                 ", CAST('3.14' AS DECIMAL(3,2)) _partition_decimal_short" +
-                ", CAST('12345678901234567890.0123456789' AS DECIMAL(30,10)) _partition_decimal_long";
+                ", CAST('12345678901234567890.0123456789' AS DECIMAL(30,10)) _partition_decimal_long" +
+                ", CAST('2017-05-01' AS DATE) _partition_date";
 
         if (storageFormat == HiveStorageFormat.AVRO) {
             select = select.replace(" CAST (3 AS SMALLINT) _smallint,", " 3 _smallint,");
@@ -302,6 +318,20 @@ public class TestHiveIntegrationSmokeTest
 
         assertUpdate(session, "INSERT INTO test_partitioned_table " + select, 1);
         assertQuery(session, "SELECT * from test_partitioned_table", select);
+        assertQuery(session,
+                "SELECT * from test_partitioned_table WHERE" +
+                        " 'foo' = _partition_string" +
+                        " AND 'bar' = _partition_varchar" +
+                        " AND CAST('boo' AS CHAR(10)) = _partition_char" +
+                        " AND CAST(1 AS TINYINT) = _partition_tinyint" +
+                        " AND CAST(1 AS SMALLINT) = _partition_smallint" +
+                        " AND 1 = _partition_integer" +
+                        " AND CAST(1 AS BIGINT) = _partition_bigint" +
+                        " AND true = _partition_boolean" +
+                        " AND CAST('3.14' AS DECIMAL(3,2)) = _partition_decimal_short" +
+                        " AND CAST('12345678901234567890.0123456789' AS DECIMAL(30,10)) = _partition_decimal_long" +
+                        " AND CAST('2017-05-01' AS DATE) = _partition_date",
+                select);
 
         assertUpdate(session, "DROP TABLE test_partitioned_table");
 
@@ -1859,6 +1889,7 @@ public class TestHiveIntegrationSmokeTest
         assertUpdate(createTable, "SELECT count(*) FROM orders");
         assertUpdate("ALTER TABLE test_rename_column RENAME COLUMN orderkey TO new_orderkey");
         assertQuery("SELECT new_orderkey, orderstatus FROM test_rename_column", "SELECT orderkey, orderstatus FROM orders");
+        assertQueryFails("ALTER TABLE test_rename_column RENAME COLUMN \"$path\" TO test", ".* Cannot rename hidden column");
         assertQueryFails("ALTER TABLE test_rename_column RENAME COLUMN orderstatus TO new_orderstatus", "Renaming partition columns is not supported");
         assertQuery("SELECT new_orderkey, orderstatus FROM test_rename_column", "SELECT orderkey, orderstatus FROM orders");
         assertUpdate("DROP TABLE test_rename_column");
@@ -1879,9 +1910,10 @@ public class TestHiveIntegrationSmokeTest
         assertUpdate(createTable, "SELECT count(*) FROM orders");
         assertQuery("SELECT orderkey, orderstatus FROM test_drop_column", "SELECT orderkey, orderstatus FROM orders");
 
+        assertQueryFails("ALTER TABLE test_drop_column DROP COLUMN \"$path\"", ".* Cannot drop hidden column");
         assertQueryFails("ALTER TABLE test_drop_column DROP COLUMN orderstatus", "Cannot drop partition columns");
         assertUpdate("ALTER TABLE test_drop_column DROP COLUMN orderkey");
-        assertQueryFails("ALTER TABLE test_drop_column DROP COLUMN custkey", "Cannot drop the only column in a table");
+        assertQueryFails("ALTER TABLE test_drop_column DROP COLUMN custkey", "Cannot drop the only non-partition column in a table");
         assertQuery("SELECT * FROM test_drop_column", "SELECT custkey, orderstatus FROM orders");
 
         assertUpdate("DROP TABLE test_drop_column");
@@ -1895,6 +1927,106 @@ public class TestHiveIntegrationSmokeTest
         assertQueryFails("CREATE TABLE test_avro_types (x smallint) WITH (format = 'AVRO')", "Column x is smallint, which is not supported by Avro. Use integer instead.");
 
         assertQueryFails("CREATE TABLE test_avro_types WITH (format = 'AVRO') AS SELECT cast(42 AS smallint) z", "Column z is smallint, which is not supported by Avro. Use integer instead.");
+    }
+
+    @Test
+    public void testOrderByChar()
+            throws Exception
+    {
+        assertUpdate("CREATE TABLE char_order_by (c_char char(2))");
+        assertUpdate("INSERT INTO char_order_by (c_char) VALUES" +
+                "(CAST('a' as CHAR(2)))," +
+                "(CAST('a\0' as CHAR(2)))," +
+                "(CAST('a  ' as CHAR(2)))", 3);
+
+        MaterializedResult actual = computeActual(getSession(),
+                "SELECT * FROM char_order_by ORDER BY c_char ASC");
+
+        assertUpdate("DROP TABLE char_order_by");
+
+        MaterializedResult expected = resultBuilder(getSession(), createCharType(2))
+                .row("a\0")
+                .row("a ")
+                .row("a ")
+                .build();
+
+        assertEquals(actual, expected);
+    }
+
+    /**
+     * Tests correctness of comparison of char(x) and varchar pushed down to a table scan as a TupleDomain
+     */
+    @Test
+    public void testPredicatePushDownToTableScan()
+            throws Exception
+    {
+        // Test not specific to Hive, but needs a connector supporting table creation
+
+        assertUpdate("CREATE TABLE test_table_with_char (a char(20))");
+        try {
+            assertUpdate("INSERT INTO test_table_with_char (a) VALUES" +
+                    "(cast('aaa' as char(20)))," +
+                    "(cast('bbb' as char(20)))," +
+                    "(cast('bbc' as char(20)))," +
+                    "(cast('bbd' as char(20)))", 4);
+
+            assertQuery(
+                    "SELECT a, a <= 'bbc' FROM test_table_with_char",
+                    "VALUES (cast('aaa' as char(20)), true), " +
+                            "(cast('bbb' as char(20)), true), " +
+                            "(cast('bbc' as char(20)), false), " +
+                            "(cast('bbd' as char(20)), false)");
+
+            assertQuery(
+                    "SELECT a FROM test_table_with_char WHERE a <= 'bbc'",
+                    "VALUES cast('aaa' as char(20)), " +
+                            "cast('bbb' as char(20))");
+        }
+        finally {
+            assertUpdate("DROP TABLE test_table_with_char");
+        }
+    }
+
+    @Test
+    public void testRcTextCharDecoding()
+            throws Exception
+    {
+        testRcTextCharDecoding(false);
+        testRcTextCharDecoding(true);
+    }
+
+    private void testRcTextCharDecoding(boolean rcFileOptimizedWriterEnabled)
+            throws Exception
+    {
+        String catalog = getSession().getCatalog().get();
+        Session session = Session.builder(getSession())
+                .setCatalogSessionProperty(catalog, RCFILE_OPTIMIZED_WRITER_ENABLED, Boolean.toString(rcFileOptimizedWriterEnabled))
+                .build();
+
+        assertUpdate(session, "CREATE TABLE test_table_with_char_rc WITH (format = 'RCTEXT') AS SELECT CAST('khaki' AS CHAR(7)) char_column", 1);
+        try {
+            assertQuery(session,
+                    "SELECT * FROM test_table_with_char_rc WHERE char_column = 'khaki  '",
+                    "VALUES (CAST('khaki' AS CHAR(7)))");
+        }
+        finally {
+            assertUpdate(session, "DROP TABLE test_table_with_char_rc");
+        }
+    }
+
+    @Test
+    public void testInvalidPartitionValue()
+            throws Exception
+    {
+        assertUpdate("CREATE TABLE invalid_partition_value (a int, b varchar) WITH (partitioned_by = ARRAY['b'])");
+        assertQueryFails(
+                "INSERT INTO invalid_partition_value VALUES (4, 'test' || chr(13))",
+                "\\QHive partition keys can only contain printable ASCII characters (0x20 - 0x7E). Invalid value: 74 65 73 74 0D\\E");
+        assertUpdate("DROP TABLE invalid_partition_value");
+
+        assertQueryFails(
+                "CREATE TABLE invalid_partition_value (a, b) WITH (partitioned_by = ARRAY['b']) AS SELECT 4, chr(9731)",
+                "\\QHive partition keys can only contain printable ASCII characters (0x20 - 0x7E). Invalid value: E2 98 83\\E");
     }
 
     private Session getParallelWriteSession()

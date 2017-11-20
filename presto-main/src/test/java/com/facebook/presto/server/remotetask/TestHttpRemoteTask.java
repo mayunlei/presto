@@ -138,7 +138,7 @@ public class TestHttpRemoteTask
                 TaskTestUtils.PLAN_FRAGMENT,
                 ImmutableMultimap.of(),
                 createInitialEmptyOutputBuffers(OutputBuffers.BufferType.BROADCAST),
-                new NodeTaskMap.PartitionedSplitCountTracker(i -> { }),
+                new NodeTaskMap.PartitionedSplitCountTracker(i -> {}),
                 true);
 
         testingTaskResource.setInitialTaskInfo(remoteTask.getTaskInfo());
@@ -396,6 +396,7 @@ public class TestHttpRemoteTask
                     ++version,
                     taskState,
                     initialTaskStatus.getSelf(),
+                    "fake",
                     initialTaskStatus.getFailures(),
                     initialTaskStatus.getQueuedPartitionedDrivers(),
                     initialTaskStatus.getRunningPartitionedDrivers(),

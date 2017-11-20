@@ -16,7 +16,7 @@ package com.facebook.presto.sql.gen;
 import com.facebook.presto.bytecode.ClassDefinition;
 import com.facebook.presto.bytecode.CompilationException;
 import com.facebook.presto.metadata.Metadata;
-import com.facebook.presto.operator.CursorProcessor;
+import com.facebook.presto.operator.project.CursorProcessor;
 import com.facebook.presto.operator.project.PageFilter;
 import com.facebook.presto.operator.project.PageProcessor;
 import com.facebook.presto.operator.project.PageProjection;
@@ -53,27 +53,19 @@ import static java.util.Objects.requireNonNull;
 
 public class ExpressionCompiler
 {
-    private final Metadata metadata;
     private final PageFunctionCompiler pageFunctionCompiler;
-
-    private final LoadingCache<CacheKey, Class<? extends CursorProcessor>> cursorProcessors = CacheBuilder.newBuilder().recordStats().maximumSize(1000).build(
-            new CacheLoader<CacheKey, Class<? extends CursorProcessor>>()
-            {
-                @Override
-                public Class<? extends CursorProcessor> load(CacheKey key)
-                        throws Exception
-                {
-                    return compile(key.getFilter(), key.getProjections(), new CursorProcessorCompiler(metadata), CursorProcessor.class);
-                }
-            });
-
+    private final LoadingCache<CacheKey, Class<? extends CursorProcessor>> cursorProcessors;
     private final CacheStatsMBean cacheStatsMBean;
 
     @Inject
     public ExpressionCompiler(Metadata metadata, PageFunctionCompiler pageFunctionCompiler)
     {
-        this.metadata = requireNonNull(metadata, "metadata is null");
+        requireNonNull(metadata, "metadata is null");
         this.pageFunctionCompiler = requireNonNull(pageFunctionCompiler, "pageFunctionCompiler is null");
+        this.cursorProcessors = CacheBuilder.newBuilder()
+                .recordStats()
+                .maximumSize(1000)
+                .build(CacheLoader.from(key -> compile(key.getFilter(), key.getProjections(), new CursorProcessorCompiler(metadata), CursorProcessor.class)));
         this.cacheStatsMBean = new CacheStatsMBean(cursorProcessors);
     }
 

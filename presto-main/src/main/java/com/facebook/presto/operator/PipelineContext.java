@@ -29,6 +29,7 @@ import org.joda.time.DateTime;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map.Entry;
 import java.util.Set;
@@ -37,6 +38,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -53,7 +55,8 @@ import static java.util.stream.Collectors.toList;
 public class PipelineContext
 {
     private final TaskContext taskContext;
-    private final Executor executor;
+    private final Executor notificationExecutor;
+    private final ScheduledExecutorService yieldExecutor;
     private final int pipelineId;
 
     private final boolean inputPipeline;
@@ -90,13 +93,14 @@ public class PipelineContext
 
     private final ConcurrentMap<Integer, OperatorStats> operatorSummaries = new ConcurrentHashMap<>();
 
-    public PipelineContext(int pipelineId, TaskContext taskContext, Executor executor, boolean inputPipeline, boolean outputPipeline)
+    public PipelineContext(int pipelineId, TaskContext taskContext, Executor notificationExecutor, ScheduledExecutorService yieldExecutor, boolean inputPipeline, boolean outputPipeline)
     {
         this.pipelineId = pipelineId;
         this.inputPipeline = inputPipeline;
         this.outputPipeline = outputPipeline;
         this.taskContext = requireNonNull(taskContext, "taskContext is null");
-        this.executor = requireNonNull(executor, "executor is null");
+        this.notificationExecutor = requireNonNull(notificationExecutor, "notificationExecutor is null");
+        this.yieldExecutor = requireNonNull(yieldExecutor, "yieldExecutor is null");
     }
 
     public TaskContext getTaskContext()
@@ -131,7 +135,7 @@ public class PipelineContext
 
     public DriverContext addDriverContext(boolean partitioned)
     {
-        DriverContext driverContext = new DriverContext(this, executor, partitioned);
+        DriverContext driverContext = new DriverContext(this, notificationExecutor, yieldExecutor, partitioned);
         drivers.add(driverContext);
         return driverContext;
     }
@@ -340,6 +344,11 @@ public class PipelineContext
         return stat;
     }
 
+    public PipelineStatus getPipelineStatus()
+    {
+        return getPipelineStatus(drivers.iterator());
+    }
+
     public PipelineStats getPipelineStats()
     {
         // check for end state to avoid callback ordering problems
@@ -351,13 +360,9 @@ public class PipelineContext
         }
 
         List<DriverContext> driverContexts = ImmutableList.copyOf(this.drivers);
+        PipelineStatus pipelineStatus = getPipelineStatus(driverContexts.iterator());
 
         int totalDriers = completedDrivers.get() + driverContexts.size();
-        int queuedDrivers = 0;
-        int queuedPartitionedDrivers = 0;
-        int runningDrivers = 0;
-        int runningPartitionedDrivers = 0;
-        int blockedDrivers = 0;
         int completedDrivers = this.completedDrivers.get();
 
         Distribution queuedTime = new Distribution(this.queuedTime);
@@ -383,22 +388,6 @@ public class PipelineContext
         for (DriverContext driverContext : driverContexts) {
             DriverStats driverStats = driverContext.getDriverStats();
             drivers.add(driverStats);
-
-            if (driverStats.getStartTime() == null) {
-                queuedDrivers++;
-                if (driverContext.isPartitioned()) {
-                    queuedPartitionedDrivers++;
-                }
-            }
-            else if (driverStats.isFullyBlocked()) {
-                blockedDrivers++;
-            }
-            else {
-                runningDrivers++;
-                if (driverContext.isPartitioned()) {
-                    runningPartitionedDrivers++;
-                }
-            }
 
             queuedTime.add(driverStats.getQueuedTime().roundTo(NANOSECONDS));
             elapsedTime.add(driverStats.getElapsedTime().roundTo(NANOSECONDS));
@@ -456,11 +445,11 @@ public class PipelineContext
                 outputPipeline,
 
                 totalDriers,
-                queuedDrivers,
-                queuedPartitionedDrivers,
-                runningDrivers,
-                runningPartitionedDrivers,
-                blockedDrivers,
+                pipelineStatus.getQueuedDrivers(),
+                pipelineStatus.getQueuedPartitionedDrivers(),
+                pipelineStatus.getRunningDrivers(),
+                pipelineStatus.getRunningPartitionedDrivers(),
+                pipelineStatus.getBlockedDrivers(),
                 completedDrivers,
 
                 succinctBytes(memoryReservation.get()),
@@ -509,5 +498,34 @@ public class PipelineContext
         }
 
         return map.replace(key, oldValue, newValue);
+    }
+
+    private static PipelineStatus getPipelineStatus(Iterator<DriverContext> driverContextsIterator)
+    {
+        int queuedDrivers = 0;
+        int runningDrivers = 0;
+        int blockedDrivers = 0;
+        int queuedPartitionedDrivers = 0;
+        int runningPartitionedDrivers = 0;
+        while (driverContextsIterator.hasNext()) {
+            DriverContext driverContext = driverContextsIterator.next();
+            if (!driverContext.isExecutionStarted()) {
+                queuedDrivers++;
+                if (driverContext.isPartitioned()) {
+                    queuedPartitionedDrivers++;
+                }
+            }
+            else if (driverContext.isFullyBlocked()) {
+                blockedDrivers++;
+            }
+            else {
+                runningDrivers++;
+                if (driverContext.isPartitioned()) {
+                    runningPartitionedDrivers++;
+                }
+            }
+        }
+
+        return new PipelineStatus(queuedDrivers, runningDrivers, blockedDrivers, queuedPartitionedDrivers, runningPartitionedDrivers);
     }
 }

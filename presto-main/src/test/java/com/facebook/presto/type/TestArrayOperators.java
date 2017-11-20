@@ -19,18 +19,19 @@ import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
-import com.facebook.presto.spi.block.InterleavedBlockBuilder;
 import com.facebook.presto.spi.function.LiteralParameters;
 import com.facebook.presto.spi.function.ScalarFunction;
 import com.facebook.presto.spi.function.SqlType;
 import com.facebook.presto.spi.type.ArrayType;
 import com.facebook.presto.spi.type.BooleanType;
 import com.facebook.presto.spi.type.MapType;
+import com.facebook.presto.spi.type.RowType;
 import com.facebook.presto.spi.type.SqlTimestamp;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.analyzer.SemanticErrorCode;
 import com.facebook.presto.sql.analyzer.SemanticException;
+import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
@@ -45,10 +46,13 @@ import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 import java.util.TimeZone;
 
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
 import static com.facebook.presto.block.BlockSerdeUtil.writeBlock;
+import static com.facebook.presto.operator.aggregation.TypedSet.MAX_FUNCTION_MEMORY;
+import static com.facebook.presto.spi.StandardErrorCode.EXCEEDED_FUNCTION_MEMORY_LIMIT;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_CAST_ARGUMENT;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
@@ -71,10 +75,12 @@ import static com.facebook.presto.type.JsonType.JSON;
 import static com.facebook.presto.type.UnknownType.UNKNOWN;
 import static com.facebook.presto.util.StructuralTestUtil.appendToBlockBuilder;
 import static com.facebook.presto.util.StructuralTestUtil.arrayBlockOf;
+import static com.facebook.presto.util.StructuralTestUtil.mapBlockOf;
 import static com.facebook.presto.util.StructuralTestUtil.mapType;
 import static java.lang.Double.NEGATIVE_INFINITY;
 import static java.lang.Double.NaN;
 import static java.lang.Double.POSITIVE_INFINITY;
+import static java.lang.Math.toIntExact;
 import static java.lang.String.format;
 import static java.util.Arrays.asList;
 import static java.util.Collections.emptyList;
@@ -158,6 +164,20 @@ public class TestArrayOperators
         assertInvalidFunction("CAST(ARRAY [1, null, 3] AS ARRAY<TIMESTAMP>)", TYPE_MISMATCH);
         assertInvalidFunction("CAST(ARRAY [1, null, 3] AS ARRAY<ARRAY<TIMESTAMP>>)", TYPE_MISMATCH);
         assertInvalidFunction("CAST(ARRAY ['puppies', 'kittens'] AS ARRAY<BIGINT>)", INVALID_CAST_ARGUMENT);
+    }
+
+    @Test
+    public void testArraySize()
+            throws Exception
+    {
+        int size = toIntExact(MAX_FUNCTION_MEMORY.toBytes() + 1);
+        assertInvalidFunction(
+                "array_distinct(ARRAY['" +
+                        Strings.repeat("x", size) + "', '" +
+                        Strings.repeat("y", size) + "', '" +
+                        Strings.repeat("z", size) +
+                        "'])",
+                EXCEEDED_FUNCTION_MEMORY_LIMIT);
     }
 
     @Test
@@ -280,6 +300,21 @@ public class TestArrayOperators
                         asMap(ImmutableList.of("h1", "h2"), asList(null, null)),
                         null));
 
+        assertFunction("CAST(JSON '[" +
+                        "[1, \"two\"], " +
+                        "[3, null], " +
+                        "{\"k1\": 1, \"k2\": \"two\"}, " +
+                        "{\"k2\": null, \"k1\": 3}, " +
+                        "null]' " +
+                        "AS ARRAY<ROW(k1 BIGINT, k2 VARCHAR)>)",
+                new ArrayType(new RowType(ImmutableList.of(BIGINT, VARCHAR), Optional.of(ImmutableList.of("k1", "k2")))),
+                asList(
+                        asList(1L, "two"),
+                        asList(3L, null),
+                        asList(1L, "two"),
+                        asList(3L, null),
+                        null));
+
         // invalid cast
         assertInvalidCast("CAST(JSON '{\"a\": 1}' AS ARRAY<BIGINT>)", "Cannot cast to array(bigint). Expected a json array, but got {\n{\"a\":1}");
         assertInvalidCast("CAST(JSON '[1, 2, 3]' AS ARRAY<ARRAY<BIGINT>>)", "Cannot cast to array(array(bigint)). Expected a json array, but got 1\n[1,2,3]");
@@ -290,7 +325,7 @@ public class TestArrayOperators
         assertInvalidCast("CAST(unchecked_to_json('[1] 2') AS ARRAY<BIGINT>)", "Cannot cast to array(bigint). Unexpected trailing token: 2\n[1] 2");
         assertInvalidCast("CAST(unchecked_to_json('[1, 2, 3') AS ARRAY<BIGINT>)", "Cannot cast to array(bigint).\n[1, 2, 3");
 
-        assertInvalidCast("CAST(JSON '[\"a\", \"b\"]' AS ARRAY<BIGINT>)", "Cannot cast to array(bigint). Can not cast 'a' to BIGINT\n[\"a\",\"b\"]");
+        assertInvalidCast("CAST(JSON '[\"a\", \"b\"]' AS ARRAY<BIGINT>)", "Cannot cast to array(bigint). Cannot cast 'a' to BIGINT\n[\"a\",\"b\"]");
         assertInvalidCast("CAST(JSON '[1234567890123.456]' AS ARRAY<INTEGER>)", "Cannot cast to array(integer). Out of range for integer: 1.234567890123456E12\n[1.234567890123456E12]");
     }
 
@@ -485,9 +520,15 @@ public class TestArrayOperators
     {
         assertFunction("ARRAY_MIN(ARRAY [])", UNKNOWN, null);
         assertFunction("ARRAY_MIN(ARRAY [NULL])", UNKNOWN, null);
+        assertFunction("ARRAY_MIN(ARRAY [NaN()])", DOUBLE, NaN);
         assertFunction("ARRAY_MIN(ARRAY [NULL, NULL, NULL])", UNKNOWN, null);
+        assertFunction("ARRAY_MIN(ARRAY [NaN(), NaN(), NaN()])", DOUBLE, NaN);
         assertFunction("ARRAY_MIN(ARRAY [NULL, 2, 3])", INTEGER, null);
+        assertFunction("ARRAY_MIN(ARRAY [NaN(), 2, 3])", DOUBLE, NaN);
+        assertFunction("ARRAY_MIN(ARRAY [NULL, NaN(), 1])", DOUBLE, NaN);
+        assertFunction("ARRAY_MIN(ARRAY [NaN(), NULL, 3.0])", DOUBLE, NaN);
         assertFunction("ARRAY_MIN(ARRAY [1.0, NULL, 3])", DOUBLE, null);
+        assertFunction("ARRAY_MIN(ARRAY [1.0, NaN(), 3])", DOUBLE, NaN);
         assertFunction("ARRAY_MIN(ARRAY ['1', '2', NULL])", createVarcharType(1), null);
         assertFunction("ARRAY_MIN(ARRAY [3, 2, 1])", INTEGER, 1);
         assertFunction("ARRAY_MIN(ARRAY [1, 2, 3])", INTEGER, 1);
@@ -506,9 +547,15 @@ public class TestArrayOperators
     {
         assertFunction("ARRAY_MAX(ARRAY [])", UNKNOWN, null);
         assertFunction("ARRAY_MAX(ARRAY [NULL])", UNKNOWN, null);
+        assertFunction("ARRAY_MAX(ARRAY [NaN()])", DOUBLE, NaN);
         assertFunction("ARRAY_MAX(ARRAY [NULL, NULL, NULL])", UNKNOWN, null);
+        assertFunction("ARRAY_MAX(ARRAY [NaN(), NaN(), NaN()])", DOUBLE, NaN);
         assertFunction("ARRAY_MAX(ARRAY [NULL, 2, 3])", INTEGER, null);
+        assertFunction("ARRAY_MAX(ARRAY [NaN(), 2, 3])", DOUBLE, NaN);
+        assertFunction("ARRAY_MAX(ARRAY [NULL, NaN(), 1])", DOUBLE, NaN);
+        assertFunction("ARRAY_MAX(ARRAY [NaN(), NULL, 3.0])", DOUBLE, NaN);
         assertFunction("ARRAY_MAX(ARRAY [1.0, NULL, 3])", DOUBLE, null);
+        assertFunction("ARRAY_MAX(ARRAY [1.0, NaN(), 3])", DOUBLE, NaN);
         assertFunction("ARRAY_MAX(ARRAY ['1', '2', NULL])", createVarcharType(1), null);
         assertFunction("ARRAY_MAX(ARRAY [3, 2, 1])", INTEGER, 3);
         assertFunction("ARRAY_MAX(ARRAY [1, 2, 3])", INTEGER, 3);
@@ -727,6 +774,8 @@ public class TestArrayOperators
         assertFunction("SLICE(ARRAY [1, 2, 3, 4], -3, 5)", new ArrayType(INTEGER), ImmutableList.of(2, 3, 4));
         assertFunction("SLICE(ARRAY [1, 2, 3, 4], 1, 0)", new ArrayType(INTEGER), ImmutableList.of());
         assertFunction("SLICE(ARRAY [1, 2, 3, 4], -2, 0)", new ArrayType(INTEGER), ImmutableList.of());
+        assertFunction("SLICE(ARRAY [1, 2, 3, 4], -5, 5)", new ArrayType(INTEGER), ImmutableList.of());
+        assertFunction("SLICE(ARRAY [1, 2, 3, 4], -6, 5)", new ArrayType(INTEGER), ImmutableList.of());
         assertFunction("SLICE(ARRAY [ARRAY [1], ARRAY [2, 3], ARRAY [4, 5, 6]], 1, 2)", new ArrayType(new ArrayType(INTEGER)), ImmutableList.of(ImmutableList.of(1), ImmutableList.of(2, 3)));
 
         assertInvalidFunction("SLICE(ARRAY [1, 2, 3, 4], 1, -1)", INVALID_FUNCTION_ARGUMENT);
@@ -1216,10 +1265,7 @@ public class TestArrayOperators
 
         // test with ARRAY[ MAP( ARRAY[1], ARRAY[2] ) ]
         MapType mapType = mapType(INTEGER, INTEGER);
-        BlockBuilder mapBuilder = new InterleavedBlockBuilder(ImmutableList.of(INTEGER, INTEGER), new BlockBuilderStatus(), 2);
-        INTEGER.writeLong(mapBuilder, 1);
-        INTEGER.writeLong(mapBuilder, 2);
-        assertArrayHashOperator("ARRAY[MAP(ARRAY[1], ARRAY[2])]", mapType, ImmutableList.of(mapBuilder.build()));
+        assertArrayHashOperator("ARRAY[MAP(ARRAY[1], ARRAY[2])]", mapType, ImmutableList.of(mapBlockOf(INTEGER, INTEGER, ImmutableMap.of(1L, 2L))));
     }
 
     public void assertInvalidFunction(String projection, ErrorCode errorCode)

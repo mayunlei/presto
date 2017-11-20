@@ -25,6 +25,7 @@ import com.facebook.presto.spiller.SpillSpaceTracker;
 import io.airlift.units.DataSize;
 
 import java.util.concurrent.Executor;
+import java.util.concurrent.ScheduledExecutorService;
 
 import static io.airlift.units.DataSize.Unit.GIGABYTE;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
@@ -33,46 +34,68 @@ public final class TestingTaskContext
 {
     private TestingTaskContext() {}
 
-    public static TaskContext createTaskContext(Executor executor, Session session)
+    public static TaskContext createTaskContext(Executor notificationExecutor, ScheduledExecutorService yieldExecutor, Session session)
     {
-        return builder(executor, session).build();
+        return builder(notificationExecutor, yieldExecutor, session).build();
     }
 
-    public static TaskContext createTaskContext(Executor executor, Session session, DataSize maxMemory)
+    public static TaskContext createTaskContext(Executor notificationExecutor, ScheduledExecutorService yieldExecutor, Session session, DataSize maxMemory)
     {
-        return builder(executor, session)
+        return builder(notificationExecutor, yieldExecutor, session)
                 .setQueryMaxMemory(maxMemory)
+                .build();
+    }
+
+    public static TaskContext createTaskContext(Executor notificationExecutor, ScheduledExecutorService yieldExecutor, Session session, TaskStateMachine taskStateMachine)
+    {
+        return builder(notificationExecutor, yieldExecutor, session)
+                .setTaskStateMachine(taskStateMachine)
                 .build();
     }
 
     public static TaskContext createTaskContext(QueryContext queryContext, Executor executor, Session session)
     {
+        return createTaskContext(queryContext, session, new TaskStateMachine(new TaskId("query", 0, 0), executor));
+    }
+
+    private static TaskContext createTaskContext(QueryContext queryContext, Session session, TaskStateMachine taskStateMachine)
+    {
         return queryContext.addTaskContext(
-                new TaskStateMachine(new TaskId("query", 0, 0), executor),
+                taskStateMachine,
                 session,
                 true,
                 true);
     }
 
-    public static Builder builder(Executor executor, Session session)
+    public static Builder builder(Executor notificationExecutor, ScheduledExecutorService yieldExecutor, Session session)
     {
-        return new Builder(executor, session);
+        return new Builder(notificationExecutor, yieldExecutor, session);
     }
 
     public static class Builder
     {
-        private final Executor executor;
+        private final Executor notificationExecutor;
+        private final ScheduledExecutorService yieldExecutor;
         private final Session session;
+        private TaskStateMachine taskStateMachine;
         private DataSize queryMaxMemory = new DataSize(256, MEGABYTE);
         private DataSize memoryPoolSize = new DataSize(1, GIGABYTE);
         private DataSize systemMemoryPoolSize = new DataSize(1, GIGABYTE);
         private DataSize maxSpillSize = new DataSize(1, GIGABYTE);
         private DataSize queryMaxSpillSize = new DataSize(1, GIGABYTE);
 
-        private Builder(Executor executor, Session session)
+        private Builder(Executor notificationExecutor, ScheduledExecutorService yieldExecutor, Session session)
         {
-            this.executor = executor;
+            this.notificationExecutor = notificationExecutor;
+            this.yieldExecutor = yieldExecutor;
             this.session = session;
+            this.taskStateMachine = new TaskStateMachine(new TaskId("query", 0, 0), notificationExecutor);
+        }
+
+        public Builder setTaskStateMachine(TaskStateMachine taskStateMachine)
+        {
+            this.taskStateMachine = taskStateMachine;
+            return this;
         }
 
         public Builder setQueryMaxMemory(DataSize queryMaxMemory)
@@ -115,11 +138,12 @@ public final class TestingTaskContext
                     queryMaxMemory,
                     memoryPool,
                     systemMemoryPool,
-                    executor,
+                    notificationExecutor,
+                    yieldExecutor,
                     queryMaxSpillSize,
                     spillSpaceTracker);
 
-            return createTaskContext(queryContext, executor, session);
+            return createTaskContext(queryContext, session, taskStateMachine);
         }
     }
 }

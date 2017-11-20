@@ -71,6 +71,7 @@ import static io.airlift.concurrent.Threads.threadsNamed;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.Executors.newFixedThreadPool;
+import static java.util.concurrent.Executors.newScheduledThreadPool;
 
 public class SqlTaskManager
         implements TaskManager, Closeable
@@ -81,6 +82,7 @@ public class SqlTaskManager
     private final ThreadPoolExecutorMBean taskNotificationExecutorMBean;
 
     private final ScheduledExecutorService taskManagementExecutor;
+    private final ScheduledExecutorService driverYieldExecutor;
 
     private final Duration infoCacheTime;
     private final Duration clientTimeout;
@@ -122,6 +124,7 @@ public class SqlTaskManager
         taskNotificationExecutorMBean = new ThreadPoolExecutorMBean((ThreadPoolExecutor) taskNotificationExecutor);
 
         this.taskManagementExecutor = requireNonNull(taskManagementExecutor, "taskManagementExecutor cannot be null").getExecutor();
+        this.driverYieldExecutor = newScheduledThreadPool(config.getTaskYieldThreads(), threadsNamed("task-yield-%s"));
 
         SqlTaskExecutionFactory sqlTaskExecutionFactory = new SqlTaskExecutionFactory(taskNotificationExecutor, taskExecutor, planner, queryMonitor, config);
 
@@ -130,32 +133,22 @@ public class SqlTaskManager
 
         DataSize maxQuerySpillPerNode = nodeSpillConfig.getQueryMaxSpillPerNode();
 
-        queryContexts = CacheBuilder.newBuilder().weakValues().build(new CacheLoader<QueryId, QueryContext>()
-        {
-            @Override
-            public QueryContext load(QueryId key)
-                    throws Exception
-            {
-                return new QueryContext(
-                        key,
+        queryContexts = CacheBuilder.newBuilder().weakValues().build(CacheLoader.from(
+                queryId -> new QueryContext(
+                        queryId,
                         maxQueryMemoryPerNode,
                         localMemoryManager.getPool(LocalMemoryManager.GENERAL_POOL),
                         localMemoryManager.getPool(LocalMemoryManager.SYSTEM_POOL),
                         taskNotificationExecutor,
+                        driverYieldExecutor,
                         maxQuerySpillPerNode,
-                        localSpillManager.getSpillSpaceTracker());
-            }
-        });
+                        localSpillManager.getSpillSpaceTracker())));
 
-        tasks = CacheBuilder.newBuilder().build(new CacheLoader<TaskId, SqlTask>()
-        {
-            @Override
-            public SqlTask load(TaskId taskId)
-                    throws Exception
-            {
-                return new SqlTask(
+        tasks = CacheBuilder.newBuilder().build(CacheLoader.from(
+                taskId -> new SqlTask(
                         taskId,
                         locationFactory.createLocalTaskLocation(taskId),
+                        nodeInfo.getNodeId(),
                         queryContexts.getUnchecked(taskId.getQueryId()),
                         sqlTaskExecutionFactory,
                         taskNotificationExecutor,
@@ -163,9 +156,7 @@ public class SqlTaskManager
                             finishedTaskStats.merge(sqlTask.getIoStats());
                             return null;
                         },
-                        maxBufferSize);
-            }
-        });
+                        maxBufferSize)));
     }
 
     @Override
@@ -219,7 +210,7 @@ public class SqlTaskManager
     {
         boolean taskCanceled = false;
         for (SqlTask task : tasks.asMap().values()) {
-            if (task.getTaskInfo().getTaskStatus().getState().isDone()) {
+            if (task.getTaskStatus().getState().isDone()) {
                 continue;
             }
             task.failed(new PrestoException(SERVER_SHUTTING_DOWN, format("Server is shutting down. Task %s has been canceled", task.getTaskId())));
@@ -420,7 +411,7 @@ public class SqlTaskManager
         // already merged the final stats, we could miss the stats from this task
         // which would result in an under-count, but we will not get an over-count.
         tasks.asMap().values().stream()
-                .filter(task -> !task.getTaskInfo().getTaskStatus().getState().isDone())
+                .filter(task -> !task.getTaskStatus().getState().isDone())
                 .forEach(task -> tempIoStats.merge(task.getIoStats()));
 
         cachedStats.resetTo(tempIoStats);

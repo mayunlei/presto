@@ -48,6 +48,7 @@ public final class SystemSessionProperties
     public static final String TASK_CONCURRENCY = "task_concurrency";
     public static final String TASK_SHARE_INDEX_LOADING = "task_share_index_loading";
     public static final String QUERY_MAX_MEMORY = "query_max_memory";
+    public static final String QUERY_MAX_EXECUTION_TIME = "query_max_execution_time";
     public static final String QUERY_MAX_RUN_TIME = "query_max_run_time";
     public static final String RESOURCE_OVERCOMMIT = "resource_overcommit";
     public static final String QUERY_MAX_CPU_TIME = "query_max_cpu_time";
@@ -73,6 +74,9 @@ public final class SystemSessionProperties
     public static final String ENABLE_INTERMEDIATE_AGGREGATIONS = "enable_intermediate_aggregations";
     public static final String PUSH_AGGREGATION_THROUGH_JOIN = "push_aggregation_through_join";
     public static final String PUSH_PARTIAL_AGGREGATION_THROUGH_JOIN = "push_partial_aggregation_through_join";
+    public static final String FORCE_SINGLE_NODE_OUTPUT = "force_single_node_output";
+    public static final String FILTER_AND_PROJECT_MIN_OUTPUT_PAGE_SIZE = "filter_and_project_min_output_page_size";
+    public static final String FILTER_AND_PROJECT_MIN_OUTPUT_PAGE_ROW_COUNT = "filter_and_project_min_output_page_row_count";
 
     private final List<PropertyMetadata<?>> sessionProperties;
 
@@ -170,10 +174,19 @@ public final class SystemSessionProperties
                         false),
                 new PropertyMetadata<>(
                         QUERY_MAX_RUN_TIME,
-                        "Maximum run time of a query",
+                        "Maximum run time of a query (includes the queueing time)",
                         VARCHAR,
                         Duration.class,
                         queryManagerConfig.getQueryMaxRunTime(),
+                        false,
+                        value -> Duration.valueOf((String) value),
+                        Duration::toString),
+                new PropertyMetadata<>(
+                        QUERY_MAX_EXECUTION_TIME,
+                        "Maximum execution time of a query",
+                        VARCHAR,
+                        Duration.class,
+                        queryManagerConfig.getQueryMaxExecutionTime(),
                         false,
                         value -> Duration.valueOf((String) value),
                         Duration::toString),
@@ -318,6 +331,25 @@ public final class SystemSessionProperties
                         PUSH_PARTIAL_AGGREGATION_THROUGH_JOIN,
                         "Push partial aggregations below joins",
                         false,
+                        false),
+                booleanSessionProperty(
+                        FORCE_SINGLE_NODE_OUTPUT,
+                        "Force single node output",
+                        featuresConfig.isForceSingleNodeOutput(),
+                        true),
+                new PropertyMetadata<>(
+                        FILTER_AND_PROJECT_MIN_OUTPUT_PAGE_SIZE,
+                        "Experimental: Minimum output page size for filter and project operators",
+                        VARCHAR,
+                        DataSize.class,
+                        featuresConfig.getFilterAndProjectMinOutputPageSize(),
+                        false,
+                        value -> DataSize.valueOf((String) value),
+                        DataSize::toString),
+                integerSessionProperty(
+                        FILTER_AND_PROJECT_MIN_OUTPUT_PAGE_ROW_COUNT,
+                        "Experimental: Minimum output page row count for filter and project operators",
+                        featuresConfig.getFilterAndProjectMinOutputPageRowCount(),
                         false));
     }
 
@@ -399,6 +431,11 @@ public final class SystemSessionProperties
     public static Duration getQueryMaxRunTime(Session session)
     {
         return session.getSystemProperty(QUERY_MAX_RUN_TIME, Duration.class);
+    }
+
+    public static Duration getQueryMaxExecutionTime(Session session)
+    {
+        return session.getSystemProperty(QUERY_MAX_EXECUTION_TIME, Duration.class);
     }
 
     public static boolean resourceOvercommit(Session session)
@@ -498,5 +535,20 @@ public final class SystemSessionProperties
     public static boolean isPushAggregationThroughJoin(Session session)
     {
         return session.getSystemProperty(PUSH_PARTIAL_AGGREGATION_THROUGH_JOIN, Boolean.class);
+    }
+
+    public static boolean isForceSingleNodeOutput(Session session)
+    {
+        return session.getSystemProperty(FORCE_SINGLE_NODE_OUTPUT, Boolean.class);
+    }
+
+    public static DataSize getFilterAndProjectMinOutputPageSize(Session session)
+    {
+        return session.getSystemProperty(FILTER_AND_PROJECT_MIN_OUTPUT_PAGE_SIZE, DataSize.class);
+    }
+
+    public static int getFilterAndProjectMinOutputPageRowCount(Session session)
+    {
+        return session.getSystemProperty(FILTER_AND_PROJECT_MIN_OUTPUT_PAGE_ROW_COUNT, Integer.class);
     }
 }

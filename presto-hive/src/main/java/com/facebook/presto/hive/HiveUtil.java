@@ -243,8 +243,7 @@ public final class HiveUtil
         }
 
         Class<?> clazz = conf.getClassByName(inputFormatName);
-        // TODO: remove redundant cast to Object after IDEA-118533 is fixed
-        return (Class<? extends InputFormat<?, ?>>) (Object) clazz.asSubclass(InputFormat.class);
+        return (Class<? extends InputFormat<?, ?>>) clazz.asSubclass(InputFormat.class);
     }
 
     static String getInputFormatName(Properties schema)
@@ -530,7 +529,7 @@ public final class HiveUtil
 
     public static Optional<DecimalType> getDecimalType(HiveType hiveType)
     {
-        return getDecimalType(hiveType.getHiveTypeName());
+        return getDecimalType(hiveType.getHiveTypeName().toString());
     }
 
     public static Optional<DecimalType> getDecimalType(String hiveTypeName)
@@ -717,26 +716,26 @@ public final class HiveUtil
         return ((HiveTableHandle) tableHandle).getSchemaTableName();
     }
 
-    public static List<HiveColumnHandle> hiveColumnHandles(String connectorId, Table table)
+    public static List<HiveColumnHandle> hiveColumnHandles(Table table)
     {
         ImmutableList.Builder<HiveColumnHandle> columns = ImmutableList.builder();
 
         // add the data fields first
-        columns.addAll(getRegularColumnHandles(connectorId, table));
+        columns.addAll(getRegularColumnHandles(table));
 
         // add the partition keys last (like Hive does)
-        columns.addAll(getPartitionKeyColumnHandles(connectorId, table));
+        columns.addAll(getPartitionKeyColumnHandles(table));
 
         // add hidden columns
-        columns.add(pathColumnHandle(connectorId));
+        columns.add(pathColumnHandle());
         if (table.getStorage().getBucketProperty().isPresent()) {
-            columns.add(bucketColumnHandle(connectorId));
+            columns.add(bucketColumnHandle());
         }
 
         return columns.build();
     }
 
-    public static List<HiveColumnHandle> getRegularColumnHandles(String connectorId, Table table)
+    public static List<HiveColumnHandle> getRegularColumnHandles(Table table)
     {
         ImmutableList.Builder<HiveColumnHandle> columns = ImmutableList.builder();
 
@@ -745,7 +744,7 @@ public final class HiveUtil
             // ignore unsupported types rather than failing
             HiveType hiveType = field.getType();
             if (hiveType.isSupportedType()) {
-                columns.add(new HiveColumnHandle(connectorId, field.getName(), hiveType, hiveType.getTypeSignature(), hiveColumnIndex, REGULAR, field.getComment()));
+                columns.add(new HiveColumnHandle(field.getName(), hiveType, hiveType.getTypeSignature(), hiveColumnIndex, REGULAR, field.getComment()));
             }
             hiveColumnIndex++;
         }
@@ -753,7 +752,7 @@ public final class HiveUtil
         return columns.build();
     }
 
-    public static List<HiveColumnHandle> getPartitionKeyColumnHandles(String connectorId, Table table)
+    public static List<HiveColumnHandle> getPartitionKeyColumnHandles(Table table)
     {
         ImmutableList.Builder<HiveColumnHandle> columns = ImmutableList.builder();
 
@@ -763,7 +762,7 @@ public final class HiveUtil
             if (!hiveType.isSupportedType()) {
                 throw new PrestoException(NOT_SUPPORTED, format("Unsupported Hive type %s found in partition keys of table %s.%s", hiveType, table.getDatabaseName(), table.getTableName()));
             }
-            columns.add(new HiveColumnHandle(connectorId, field.getName(), hiveType, hiveType.getTypeSignature(), -1, PARTITION_KEY, field.getComment()));
+            columns.add(new HiveColumnHandle(field.getName(), hiveType, hiveType.getTypeSignature(), -1, PARTITION_KEY, field.getComment()));
         }
 
         return columns.build();

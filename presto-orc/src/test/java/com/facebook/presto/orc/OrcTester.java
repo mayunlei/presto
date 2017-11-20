@@ -125,7 +125,7 @@ import static com.facebook.presto.orc.metadata.CompressionKind.SNAPPY;
 import static com.facebook.presto.orc.metadata.CompressionKind.ZLIB;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
-import static com.facebook.presto.spi.type.Chars.trimSpacesAndTruncateToLength;
+import static com.facebook.presto.spi.type.Chars.truncateToLengthAndTrimSpaces;
 import static com.facebook.presto.spi.type.DateType.DATE;
 import static com.facebook.presto.spi.type.Decimals.rescale;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
@@ -615,7 +615,7 @@ public class OrcTester
     static OrcRecordReader createCustomOrcRecordReader(TempFile tempFile, MetadataReader metadataReader, OrcPredicate predicate, Type type)
             throws IOException
     {
-        OrcDataSource orcDataSource = new FileOrcDataSource(tempFile.getFile(), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE));
+        OrcDataSource orcDataSource = new FileOrcDataSource(tempFile.getFile(), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), true);
         OrcReader orcReader = new OrcReader(orcDataSource, metadataReader, new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), MAX_BLOCK_SIZE);
 
         assertEquals(orcReader.getColumnNames(), ImmutableList.of("test"));
@@ -672,7 +672,7 @@ public class OrcTester
 
         writer.write(new Page(blockBuilder.build()));
         writer.close();
-        writer.validate(new FileOrcDataSource(outputFile, new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE)));
+        writer.validate(new FileOrcDataSource(outputFile, new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), true));
         return new DataSize(output.size(), Unit.BYTE);
     }
 
@@ -706,7 +706,7 @@ public class OrcTester
                 type.writeSlice(blockBuilder, slice);
             }
             else if (type instanceof CharType) {
-                Slice slice = trimSpacesAndTruncateToLength(utf8Slice((String) value), type);
+                Slice slice = truncateToLengthAndTrimSpaces(utf8Slice((String) value), type);
                 type.writeSlice(blockBuilder, slice);
             }
             else if (VARBINARY.equals(type)) {
@@ -1186,7 +1186,7 @@ public class OrcTester
                 Text.class,
                 compression != NONE,
                 createTableProperties("test", getJavaObjectInspector(type).getTypeName()),
-                () -> { });
+                () -> {});
     }
 
     private static RecordWriter createDwrfRecordWriter(File outputFile, CompressionKind compressionCodec, Type type)
@@ -1205,7 +1205,7 @@ public class OrcTester
                 Text.class,
                 compressionCodec != NONE,
                 createTableProperties("test", getJavaObjectInspector(type).getTypeName()),
-                () -> { });
+                () -> {});
     }
 
     static SettableStructObjectInspector createSettableStructObjectInspector(String name, Type type)

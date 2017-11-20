@@ -19,14 +19,15 @@ import com.facebook.presto.metadata.FunctionListBuilder;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.Split;
 import com.facebook.presto.metadata.SqlFunction;
-import com.facebook.presto.operator.CursorProcessor;
 import com.facebook.presto.operator.DriverContext;
+import com.facebook.presto.operator.DriverYieldSignal;
 import com.facebook.presto.operator.FilterAndProjectOperator.FilterAndProjectOperatorFactory;
 import com.facebook.presto.operator.Operator;
 import com.facebook.presto.operator.OperatorFactory;
 import com.facebook.presto.operator.ScanFilterAndProjectOperator;
 import com.facebook.presto.operator.SourceOperator;
 import com.facebook.presto.operator.SourceOperatorFactory;
+import com.facebook.presto.operator.project.CursorProcessor;
 import com.facebook.presto.operator.project.InterpretedPageFilter;
 import com.facebook.presto.operator.project.InterpretedPageProjection;
 import com.facebook.presto.operator.project.PageFilter;
@@ -66,6 +67,7 @@ import com.facebook.presto.sql.tree.SymbolReference;
 import com.facebook.presto.testing.LocalQueryRunner;
 import com.facebook.presto.testing.MaterializedResult;
 import com.facebook.presto.testing.TestingTransactionHandle;
+import com.facebook.presto.type.TypeRegistry;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
@@ -73,6 +75,7 @@ import com.google.common.collect.Iterators;
 import com.google.common.util.concurrent.UncheckedExecutionException;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
+import io.airlift.units.DataSize;
 import org.joda.time.DateTime;
 import org.joda.time.DateTimeZone;
 import org.openjdk.jol.info.ClassLayout;
@@ -87,6 +90,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
@@ -118,9 +122,11 @@ import static com.facebook.presto.testing.TestingTaskContext.createTaskContext;
 import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.airlift.slice.SizeOf.sizeOf;
 import static io.airlift.testing.Assertions.assertInstanceOf;
+import static io.airlift.units.DataSize.Unit.BYTE;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.Executors.newCachedThreadPool;
+import static java.util.concurrent.Executors.newScheduledThreadPool;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertNull;
@@ -131,6 +137,7 @@ public final class FunctionAssertions
         implements Closeable
 {
     private static final ExecutorService EXECUTOR = newCachedThreadPool(daemonThreadsNamed("test-%s"));
+    private static final ScheduledExecutorService SCHEDULED_EXECUTOR = newScheduledThreadPool(2, daemonThreadsNamed("test-scheduledExecutor-%s"));
 
     private static final SqlParser SQL_PARSER = new SqlParser();
 
@@ -211,6 +218,11 @@ public final class FunctionAssertions
         runner = new LocalQueryRunner(session, featuresConfig);
         metadata = runner.getMetadata();
         compiler = runner.getExpressionCompiler();
+    }
+
+    public TypeRegistry getTypeRegistry()
+    {
+        return runner.getTypeManager();
     }
 
     public Metadata getMetadata()
@@ -306,7 +318,7 @@ public final class FunctionAssertions
         long maxRetainedSize = 0;
         int maxIterationCount = 0;
         for (int iterationCount = 0; iterationCount < Math.max(1000, maxIterationCount * 4); iterationCount++) {
-            PageProcessorOutput output = processor.process(session.toConnectorSession(), SOURCE_PAGE);
+            PageProcessorOutput output = processor.process(session.toConnectorSession(), new DriverYieldSignal(), SOURCE_PAGE);
             // consume the iterator
             Iterators.getOnlyElement(output);
 
@@ -707,7 +719,9 @@ public final class FunctionAssertions
                 0,
                 new PlanNodeId("test"),
                 () -> processor,
-                ImmutableList.of(pageProjection.getType()));
+                ImmutableList.of(pageProjection.getType()),
+                new DataSize(0, BYTE),
+                0);
         return operatorFactory.createOperator(createDriverContext(session));
     }
 
@@ -716,7 +730,7 @@ public final class FunctionAssertions
         try {
             Supplier<PageProcessor> processor = compiler.compilePageProcessor(Optional.of(filter), ImmutableList.of());
 
-            return new FilterAndProjectOperatorFactory(0, new PlanNodeId("test"), processor, ImmutableList.of());
+            return new FilterAndProjectOperatorFactory(0, new PlanNodeId("test"), processor, ImmutableList.of(), new DataSize(0, BYTE), 0);
         }
         catch (Throwable e) {
             if (e instanceof UncheckedExecutionException) {
@@ -730,7 +744,7 @@ public final class FunctionAssertions
     {
         try {
             Supplier<PageProcessor> processor = compiler.compilePageProcessor(filter, ImmutableList.of(projection));
-            return new FilterAndProjectOperatorFactory(0, new PlanNodeId("test"), processor, ImmutableList.of(projection.getType()));
+            return new FilterAndProjectOperatorFactory(0, new PlanNodeId("test"), processor, ImmutableList.of(projection.getType()), new DataSize(0, BYTE), 0);
         }
         catch (Throwable e) {
             if (e instanceof UncheckedExecutionException) {
@@ -760,7 +774,9 @@ public final class FunctionAssertions
                     cursorProcessor,
                     pageProcessor,
                     ImmutableList.of(),
-                    ImmutableList.of(projection.getType()));
+                    ImmutableList.of(projection.getType()),
+                    new DataSize(0, BYTE),
+                    0);
         }
         catch (Throwable e) {
             if (e instanceof UncheckedExecutionException) {
@@ -805,7 +821,7 @@ public final class FunctionAssertions
 
     private static DriverContext createDriverContext(Session session)
     {
-        return createTaskContext(EXECUTOR, session)
+        return createTaskContext(EXECUTOR, SCHEDULED_EXECUTOR, session)
                 .addPipelineContext(0, true, true)
                 .addDriverContext();
     }

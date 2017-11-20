@@ -90,7 +90,7 @@ public class TestMemoryPools
         systemPool = new MemoryPool(new MemoryPoolId("testSystem"), TEN_MEGABYTES);
         fakeQueryId = new QueryId("fake");
         SpillSpaceTracker spillSpaceTracker = new SpillSpaceTracker(new DataSize(1, GIGABYTE));
-        QueryContext queryContext = new QueryContext(new QueryId("query"), TEN_MEGABYTES, userPool, systemPool, localQueryRunner.getExecutor(), TEN_MEGABYTES, spillSpaceTracker);
+        QueryContext queryContext = new QueryContext(new QueryId("query"), TEN_MEGABYTES, userPool, systemPool, localQueryRunner.getExecutor(), localQueryRunner.getScheduler(), TEN_MEGABYTES, spillSpaceTracker);
         taskContext = createTaskContext(queryContext, localQueryRunner.getExecutor(), session);
         drivers = driversSupplier.get();
     }
@@ -99,8 +99,7 @@ public class TestMemoryPools
     {
         // query will reserve all memory in the user pool and discard the output
         setUp(() -> {
-            OutputFactory outputFactory = new PageConsumerOutputFactory(types -> (page -> {
-            }));
+            OutputFactory outputFactory = new PageConsumerOutputFactory(types -> (page -> {}));
             return localQueryRunner.createDrivers("SELECT COUNT(*) FROM orders JOIN lineitem USING (orderkey)", outputFactory, taskContext);
         });
     }
@@ -115,8 +114,7 @@ public class TestMemoryPools
                     new PlanNodeId("revokable_operator"),
                     TableScanOperator.class.getSimpleName());
 
-            OutputFactory outputFactory = new PageConsumerOutputFactory(types -> (page -> {
-            }));
+            OutputFactory outputFactory = new PageConsumerOutputFactory(types -> (page -> {}));
             Operator outputOperator = outputFactory.createOutputOperator(2, new PlanNodeId("output"), ImmutableList.of(), Function.identity(), new TestingPagesSerdeFactory()).createOperator(driverContext);
             RevocableMemoryOperator revocableMemoryOperator = new RevocableMemoryOperator(revokableOperatorContext, reservedPerPage, numberOfPages);
             createOperator.set(revocableMemoryOperator);

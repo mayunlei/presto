@@ -96,8 +96,10 @@ import com.facebook.presto.spi.block.BlockEncodingSerde;
 import com.facebook.presto.spi.connector.ConnectorFactory;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spiller.FileSingleStreamSpillerFactory;
+import com.facebook.presto.spiller.GenericPartitioningSpillerFactory;
 import com.facebook.presto.spiller.GenericSpillerFactory;
 import com.facebook.presto.spiller.NodeSpillConfig;
+import com.facebook.presto.spiller.PartitioningSpillerFactory;
 import com.facebook.presto.spiller.SpillerFactory;
 import com.facebook.presto.spiller.SpillerStats;
 import com.facebook.presto.split.PageSinkManager;
@@ -180,6 +182,8 @@ import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Function;
 
+import static com.facebook.presto.SystemSessionProperties.getFilterAndProjectMinOutputPageRowCount;
+import static com.facebook.presto.SystemSessionProperties.getFilterAndProjectMinOutputPageSize;
 import static com.facebook.presto.execution.SqlQueryManager.unwrapExecuteStatement;
 import static com.facebook.presto.execution.SqlQueryManager.validateParameters;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
@@ -196,14 +200,14 @@ import static io.airlift.json.JsonCodec.jsonCodec;
 import static java.util.Collections.emptyList;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.Executors.newCachedThreadPool;
-import static java.util.concurrent.Executors.newSingleThreadScheduledExecutor;
+import static java.util.concurrent.Executors.newScheduledThreadPool;
 
 public class LocalQueryRunner
         implements QueryRunner
 {
     private final Session defaultSession;
-    private final ExecutorService executor;
-    private final ScheduledExecutorService transactionCheckExecutor;
+    private final ExecutorService notificationExecutor;
+    private final ScheduledExecutorService yieldExecutor;
     private final FinalizerService finalizerService;
 
     private final SqlParser sqlParser;
@@ -223,6 +227,7 @@ public class LocalQueryRunner
     private final TransactionManager transactionManager;
     private final FileSingleStreamSpillerFactory singleStreamSpillerFactory;
     private final SpillerFactory spillerFactory;
+    private final PartitioningSpillerFactory partitioningSpillerFactory;
 
     private final PageFunctionCompiler pageFunctionCompiler;
     private final ExpressionCompiler expressionCompiler;
@@ -274,15 +279,15 @@ public class LocalQueryRunner
 
         this.nodeSpillConfig = requireNonNull(nodeSpillConfig, "nodeSpillConfig is null");
         this.alwaysRevokeMemory = alwaysRevokeMemory;
-        this.executor = newCachedThreadPool(daemonThreadsNamed("local-query-runner-%s"));
-        this.transactionCheckExecutor = newSingleThreadScheduledExecutor(daemonThreadsNamed("transaction-idle-check"));
+        this.notificationExecutor = newCachedThreadPool(daemonThreadsNamed("local-query-runner-executor-%s"));
+        this.yieldExecutor = newScheduledThreadPool(2, daemonThreadsNamed("local-query-runner-scheduler-%s"));
         this.finalizerService = new FinalizerService();
         finalizerService.start();
 
         this.sqlParser = new SqlParser();
         this.nodeManager = new InMemoryNodeManager();
         this.typeRegistry = new TypeRegistry();
-        this.pageSorter = new PagesIndexPageSorter(new PagesIndex.TestingFactory());
+        this.pageSorter = new PagesIndexPageSorter(new PagesIndex.TestingFactory(false));
         this.pageIndexerFactory = new GroupByHashPageIndexerFactory(new JoinCompiler());
         this.indexManager = new IndexManager();
         NodeScheduler nodeScheduler = new NodeScheduler(
@@ -294,9 +299,9 @@ public class LocalQueryRunner
         CatalogManager catalogManager = new CatalogManager();
         this.transactionManager = TransactionManager.create(
                 new TransactionManagerConfig().setIdleTimeout(new Duration(1, TimeUnit.DAYS)),
-                transactionCheckExecutor,
+                yieldExecutor,
                 catalogManager,
-                executor);
+                notificationExecutor);
         this.nodePartitioningManager = new NodePartitioningManager(nodeScheduler);
 
         this.splitManager = new SplitManager(new QueryManagerConfig());
@@ -362,6 +367,7 @@ public class LocalQueryRunner
                 defaultSession.getRemoteUserAddress(),
                 defaultSession.getUserAgent(),
                 defaultSession.getClientInfo(),
+                defaultSession.getClientTags(),
                 defaultSession.getStartTime(),
                 defaultSession.getSystemProperties(),
                 defaultSession.getConnectorProperties(),
@@ -387,6 +393,7 @@ public class LocalQueryRunner
 
         SpillerStats spillerStats = new SpillerStats();
         this.singleStreamSpillerFactory = new FileSingleStreamSpillerFactory(blockEncodingSerde, spillerStats, featuresConfig);
+        this.partitioningSpillerFactory = new GenericPartitioningSpillerFactory(this.singleStreamSpillerFactory);
         this.spillerFactory = new GenericSpillerFactory(singleStreamSpillerFactory);
     }
 
@@ -399,8 +406,8 @@ public class LocalQueryRunner
     @Override
     public void close()
     {
-        executor.shutdownNow();
-        transactionCheckExecutor.shutdownNow();
+        notificationExecutor.shutdownNow();
+        yieldExecutor.shutdownNow();
         connectorManager.stop();
         finalizerService.destroy();
         singleStreamSpillerFactory.destroy();
@@ -443,7 +450,12 @@ public class LocalQueryRunner
 
     public ExecutorService getExecutor()
     {
-        return executor;
+        return notificationExecutor;
+    }
+
+    public ScheduledExecutorService getScheduler()
+    {
+        return yieldExecutor;
     }
 
     @Override
@@ -548,7 +560,7 @@ public class LocalQueryRunner
                 return builder.get()::page;
             });
 
-            TaskContext taskContext = TestingTaskContext.builder(executor, session)
+            TaskContext taskContext = TestingTaskContext.builder(notificationExecutor, yieldExecutor, session)
                     .setMaxSpillSize(nodeSpillConfig.getMaxSpillPerNode())
                     .setQueryMaxSpillSize(nodeSpillConfig.getQueryMaxSpillPerNode())
                     .build();
@@ -604,7 +616,7 @@ public class LocalQueryRunner
             System.out.println(PlanPrinter.textLogicalPlan(plan.getRoot(), plan.getTypes(), metadata, costCalculator, session));
         }
 
-        SubPlan subplan = PlanFragmenter.createSubPlans(session, metadata, plan);
+        SubPlan subplan = PlanFragmenter.createSubPlans(session, metadata, plan, true);
         if (!subplan.getChildren().isEmpty()) {
             throw new AssertionError("Expected subplan to have no children");
         }
@@ -626,8 +638,10 @@ public class LocalQueryRunner
                 new CompilerConfig().setInterpreterEnabled(false), // make sure tests fail if compiler breaks
                 new TaskManagerConfig().setTaskConcurrency(4),
                 spillerFactory,
+                singleStreamSpillerFactory,
+                partitioningSpillerFactory,
                 blockEncodingSerde,
-                new PagesIndex.TestingFactory(),
+                new PagesIndex.TestingFactory(false),
                 new JoinCompiler(),
                 new LookupJoinOperators(new JoinProbeCompiler()));
 
@@ -686,7 +700,7 @@ public class LocalQueryRunner
         }
 
         for (DriverFactory driverFactory : localExecutionPlan.getDriverFactories()) {
-            driverFactory.close();
+            driverFactory.noMoreDrivers();
         }
 
         return ImmutableList.copyOf(drivers);
@@ -804,7 +818,7 @@ public class LocalQueryRunner
             }
 
             @Override
-            public void close()
+            public void noMoreOperators()
             {
             }
 
@@ -816,7 +830,7 @@ public class LocalQueryRunner
         };
     }
 
-    public OperatorFactory createHashProjectOperator(int operatorId, PlanNodeId planNodeId, List<Type> columnTypes)
+    public OperatorFactory createHashProjectOperator(Session session, int operatorId, PlanNodeId planNodeId, List<Type> columnTypes)
     {
         ImmutableMap.Builder<Symbol, Type> symbolTypes = ImmutableMap.builder();
         ImmutableMap.Builder<Symbol, Integer> symbolToInputMapping = ImmutableMap.builder();
@@ -848,7 +862,9 @@ public class LocalQueryRunner
                 operatorId,
                 planNodeId,
                 () -> new PageProcessor(Optional.empty(), projections.build()),
-                ImmutableList.copyOf(Iterables.concat(columnTypes, ImmutableList.of(BIGINT))));
+                ImmutableList.copyOf(Iterables.concat(columnTypes, ImmutableList.of(BIGINT))),
+                getFilterAndProjectMinOutputPageSize(session),
+                getFilterAndProjectMinOutputPageRowCount(session));
     }
 
     private Split getLocalQuerySplit(Session session, TableLayoutHandle handle)

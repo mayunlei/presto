@@ -366,7 +366,7 @@ public abstract class AbstractTestDistributedQueries
         assertUpdate("ALTER TABLE test_drop_column DROP COLUMN x");
         assertQueryFails("SELECT x FROM test_drop_column", ".* Column 'x' cannot be resolved");
 
-        assertQueryFails("ALTER TABLE test_drop_column DROP COLUMN a", "Cannot drop the only column in a table");
+        assertQueryFails("ALTER TABLE test_drop_column DROP COLUMN a", ".* Cannot drop the only column in a table");
     }
 
     @Test
@@ -749,7 +749,8 @@ public abstract class AbstractTestDistributedQueries
                             ImmutableList.of()),
                     new Duration(1, MINUTES));
 
-            long beforeQueryCount = queryManager.getStats().getCompletedQueries().getTotalCount();
+            long beforeCompletedQueriesCount = queryManager.getStats().getCompletedQueries().getTotalCount();
+            long beforeSubmittedQueriesCount = queryManager.getStats().getSubmittedQueries().getTotalCount();
             assertUpdate("CREATE TABLE test_query_logging_count AS SELECT 1 foo_1, 2 foo_2_4", 1);
             assertQuery("SELECT foo_1, foo_2_4 FROM test_query_logging_count", "SELECT 1, 2");
             assertUpdate("DROP TABLE test_query_logging_count");
@@ -757,8 +758,9 @@ public abstract class AbstractTestDistributedQueries
 
             // TODO: Figure out a better way of synchronization
             assertUntilTimeout(
-                    () -> assertEquals(queryManager.getStats().getCompletedQueries().getTotalCount() - beforeQueryCount, 4),
+                    () -> assertEquals(queryManager.getStats().getCompletedQueries().getTotalCount() - beforeCompletedQueriesCount, 4),
                     new Duration(1, MINUTES));
+            assertEquals(queryManager.getStats().getSubmittedQueries().getTotalCount() - beforeSubmittedQueriesCount, 4);
         });
     }
 
@@ -956,5 +958,17 @@ public abstract class AbstractTestDistributedQueries
         assertTrue(queryInfo.getQueryStats().getWrittenDataSize().toBytes() > 0L);
 
         assertUpdate("DROP TABLE test_written_stats");
+    }
+
+    @Test
+    public void testComplexCast()
+    {
+        Session session = Session.builder(getSession())
+                .setSystemProperty(SystemSessionProperties.OPTIMIZE_DISTINCT_AGGREGATIONS, "true")
+                .build();
+        // This is optimized using CAST(null AS interval day to second) which may be problematic to deserialize on worker
+        assertQuery(session, "WITH t(a, b) AS (VALUES (1, INTERVAL '1' SECOND)) " +
+                "SELECT count(DISTINCT a), CAST(max(b) AS VARCHAR) FROM t",
+                "VALUES (1, '0 00:00:01.000')");
     }
 }

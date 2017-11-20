@@ -99,8 +99,7 @@ public class MapType
         long result = 0;
 
         for (int i = 0; i < mapBlock.getPositionCount(); i += 2) {
-            result += hashPosition(keyType, mapBlock, i);
-            result += hashPosition(valueType, mapBlock, i + 1);
+            result += hashPosition(keyType, mapBlock, i) ^ hashPosition(valueType, mapBlock, i + 1);
         }
         return result;
     }
@@ -217,6 +216,9 @@ public class MapType
     @Override
     public void writeObject(BlockBuilder blockBuilder, Object value)
     {
+        if (!(value instanceof SingleMapBlock)) {
+            throw new IllegalArgumentException("Maps must be represented with SingleMapBlock");
+        }
         blockBuilder.writeObject(value).closeEntry();
     }
 

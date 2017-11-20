@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.function.BiConsumer;
 
 import static com.facebook.presto.spi.block.BlockUtil.checkValidPositions;
+import static com.facebook.presto.spi.block.BlockUtil.compactSlice;
 import static java.util.Objects.requireNonNull;
 
 public class FixedWidthBlock
@@ -86,8 +87,8 @@ public class FixedWidthBlock
     @Override
     public void retainedBytesForEachPart(BiConsumer<Object, Long> consumer)
     {
-        consumer.accept(slice, (long) slice.getRetainedSize());
-        consumer.accept(valueIsNull, (long) valueIsNull.getRetainedSize());
+        consumer.accept(slice, slice.getRetainedSize());
+        consumer.accept(valueIsNull, valueIsNull.getRetainedSize());
         consumer.accept(this, (long) INSTANCE_SIZE);
     }
 
@@ -125,8 +126,12 @@ public class FixedWidthBlock
             throw new IndexOutOfBoundsException("Invalid position " + positionOffset + " in block with " + positionCount + " positions");
         }
 
-        Slice newSlice = Slices.copyOf(slice, positionOffset * fixedSize, length * fixedSize);
-        Slice newValueIsNull = Slices.copyOf(valueIsNull, positionOffset, length);
+        Slice newSlice = compactSlice(slice, positionOffset * fixedSize, length * fixedSize);
+        Slice newValueIsNull = compactSlice(valueIsNull, positionOffset, length);
+
+        if (newSlice == slice && newValueIsNull == valueIsNull) {
+            return this;
+        }
         return new FixedWidthBlock(fixedSize, length, newSlice, newValueIsNull);
     }
 

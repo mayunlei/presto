@@ -17,7 +17,7 @@ import com.facebook.presto.cli.ClientOptions.OutputFormat;
 import com.facebook.presto.client.Column;
 import com.facebook.presto.client.ErrorLocation;
 import com.facebook.presto.client.QueryError;
-import com.facebook.presto.client.QueryResults;
+import com.facebook.presto.client.QueryStatusInfo;
 import com.facebook.presto.client.StatementClient;
 import com.google.common.base.Splitter;
 import com.google.common.base.Strings;
@@ -37,6 +37,7 @@ import java.io.PrintStream;
 import java.io.Writer;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -62,6 +63,16 @@ public class Query
         this.client = requireNonNull(client, "client is null");
     }
 
+    public Optional<String> getSetCatalog()
+    {
+        return client.getSetCatalog();
+    }
+
+    public Optional<String> getSetSchema()
+    {
+        return client.getSetSchema();
+    }
+
     public Map<String, String> getSetSessionProperties()
     {
         return client.getSetSessionProperties();
@@ -84,7 +95,7 @@ public class Query
 
     public String getStartedTransactionId()
     {
-        return client.getStartedtransactionId();
+        return client.getStartedTransactionId();
     }
 
     public boolean isClearTransactionId()
@@ -127,7 +138,7 @@ public class Query
         }
 
         if ((!client.isFailed()) && (!client.isGone()) && (!client.isClosed())) {
-            QueryResults results = client.isValid() ? client.current() : client.finalResults();
+            QueryStatusInfo results = client.isValid() ? client.currentStatusInfo() : client.finalStatusInfo();
             if (results.getUpdateType() != null) {
                 renderUpdate(errorChannel, results);
             }
@@ -157,12 +168,12 @@ public class Query
 
     private void waitForData()
     {
-        while (client.isValid() && (client.current().getData() == null)) {
+        while (client.isValid() && (client.currentData().getData() == null)) {
             client.advance();
         }
     }
 
-    private void renderUpdate(PrintStream out, QueryResults results)
+    private void renderUpdate(PrintStream out, QueryStatusInfo results)
     {
         String status = results.getUpdateType();
         if (results.getUpdateCount() != null) {
@@ -284,7 +295,7 @@ public class Query
 
     public void renderFailure(PrintStream out)
     {
-        QueryResults results = client.finalResults();
+        QueryStatusInfo results = client.finalStatusInfo();
         QueryError error = results.getError();
         checkState(error != null);
 

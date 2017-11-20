@@ -23,6 +23,7 @@ import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.sql.relational.RowExpression;
 import com.facebook.presto.testing.MaterializedResult;
 import com.google.common.collect.ImmutableList;
+import io.airlift.units.DataSize;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
@@ -30,6 +31,7 @@ import org.testng.annotations.Test;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Supplier;
 
 import static com.facebook.presto.RowPagesBuilder.rowPagesBuilder;
@@ -38,6 +40,7 @@ import static com.facebook.presto.metadata.MetadataManager.createTestMetadataMan
 import static com.facebook.presto.operator.OperatorAssertion.assertOperatorEquals;
 import static com.facebook.presto.spi.function.OperatorType.ADD;
 import static com.facebook.presto.spi.function.OperatorType.BETWEEN;
+import static com.facebook.presto.spi.function.OperatorType.EQUAL;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
@@ -46,20 +49,25 @@ import static com.facebook.presto.sql.relational.Expressions.constant;
 import static com.facebook.presto.sql.relational.Expressions.field;
 import static com.facebook.presto.testing.TestingTaskContext.createTaskContext;
 import static io.airlift.concurrent.Threads.daemonThreadsNamed;
+import static io.airlift.units.DataSize.Unit.BYTE;
+import static io.airlift.units.DataSize.Unit.KILOBYTE;
 import static java.util.concurrent.Executors.newCachedThreadPool;
+import static java.util.concurrent.Executors.newScheduledThreadPool;
 
 @Test(singleThreaded = true)
 public class TestFilterAndProjectOperator
 {
     private ExecutorService executor;
+    private ScheduledExecutorService scheduledExecutor;
     private DriverContext driverContext;
 
     @BeforeMethod
     public void setUp()
     {
-        executor = newCachedThreadPool(daemonThreadsNamed("test-%s"));
+        executor = newCachedThreadPool(daemonThreadsNamed("test-executor-%s"));
+        scheduledExecutor = newScheduledThreadPool(2, daemonThreadsNamed("test-scheduledExecutor-%s"));
 
-        driverContext = createTaskContext(executor, TEST_SESSION)
+        driverContext = createTaskContext(executor, scheduledExecutor, TEST_SESSION)
                 .addPipelineContext(0, true, true)
                 .addDriverContext();
     }
@@ -68,6 +76,7 @@ public class TestFilterAndProjectOperator
     public void tearDown()
     {
         executor.shutdownNow();
+        scheduledExecutor.shutdownNow();
     }
 
     @Test
@@ -100,7 +109,9 @@ public class TestFilterAndProjectOperator
                 0,
                 new PlanNodeId("test"),
                 processor,
-                ImmutableList.of(VARCHAR, BIGINT));
+                ImmutableList.of(VARCHAR, BIGINT),
+                new DataSize(0, BYTE),
+                0);
 
         MaterializedResult expected = MaterializedResult.resultBuilder(driverContext.getSession(), VARCHAR, BIGINT)
                 .row("10", 15L)
@@ -113,6 +124,45 @@ public class TestFilterAndProjectOperator
                 .row("17", 22L)
                 .row("18", 23L)
                 .row("19", 24L)
+                .build();
+
+        assertOperatorEquals(operatorFactory, driverContext, input, expected);
+    }
+
+    @Test
+    public void testMergeOutput()
+            throws Exception
+    {
+        List<Page> input = rowPagesBuilder(VARCHAR, BIGINT)
+                .addSequencePage(100, 0, 0)
+                .addSequencePage(100, 0, 0)
+                .addSequencePage(100, 0, 0)
+                .addSequencePage(100, 0, 0)
+                .build();
+
+        RowExpression filter = call(
+                Signature.internalOperator(EQUAL, BOOLEAN.getTypeSignature(), ImmutableList.of(BIGINT.getTypeSignature(), BIGINT.getTypeSignature())),
+                BOOLEAN,
+                field(1, BIGINT),
+                constant(10L, BIGINT));
+
+        MetadataManager metadata = createTestMetadataManager();
+        ExpressionCompiler compiler = new ExpressionCompiler(metadata, new PageFunctionCompiler(metadata, 0));
+        Supplier<PageProcessor> processor = compiler.compilePageProcessor(Optional.of(filter), ImmutableList.of(field(1, BIGINT)));
+
+        OperatorFactory operatorFactory = new FilterAndProjectOperator.FilterAndProjectOperatorFactory(
+                0,
+                new PlanNodeId("test"),
+                processor,
+                ImmutableList.of(BIGINT),
+                new DataSize(64, KILOBYTE),
+                2);
+
+        List<Page> expected = rowPagesBuilder(BIGINT)
+                .row(10L)
+                .row(10L)
+                .row(10L)
+                .row(10L)
                 .build();
 
         assertOperatorEquals(operatorFactory, driverContext, input, expected);

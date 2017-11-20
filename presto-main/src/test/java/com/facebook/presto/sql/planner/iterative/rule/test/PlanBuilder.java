@@ -215,7 +215,7 @@ public class PlanBuilder
             checkArgument(expression instanceof FunctionCall);
             FunctionCall aggregation = (FunctionCall) expression;
             Signature signature = metadata.getFunctionRegistry().resolveFunction(aggregation.getName(), TypeSignatureProvider.fromTypes(inputTypes));
-            return addAggregation(output, new Aggregation(aggregation, signature, mask));
+            return addAggregation(output, new Aggregation(aggregation, signature, mask, ImmutableList.of(), ImmutableList.of()));
         }
 
         public AggregationBuilder addAggregation(Symbol output, Aggregation aggregation)
@@ -570,6 +570,18 @@ public class PlanBuilder
                 specification,
                 ImmutableMap.copyOf(functions),
                 Optional.empty(),
+                ImmutableSet.of(),
+                0);
+    }
+
+    public WindowNode window(WindowNode.Specification specification, Map<Symbol, WindowNode.Function> functions, Symbol hashSymbol, PlanNode source)
+    {
+        return new WindowNode(
+                idAllocator.getNextId(),
+                source,
+                specification,
+                ImmutableMap.copyOf(functions),
+                Optional.of(hashSymbol),
                 ImmutableSet.of(),
                 0);
     }
