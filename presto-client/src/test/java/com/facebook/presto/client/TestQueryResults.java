@@ -13,54 +13,53 @@
  */
 package com.facebook.presto.client;
 
-import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
+import com.facebook.airlift.json.JsonCodec;
 import org.testng.annotations.Test;
 
-import java.util.Base64;
-import java.util.List;
-
-import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
-import static com.google.common.collect.Lists.newArrayList;
+import static com.facebook.airlift.json.JsonCodec.jsonCodec;
 import static org.testng.Assert.assertEquals;
 
 public class TestQueryResults
 {
-    @Test
-    public void testFixData()
-    {
-        assertQueryResult("bigint", 1000, 1000L);
-        assertQueryResult("integer", 100, 100);
-        assertQueryResult("smallint", 10, (short) 10);
-        assertQueryResult("tinyint", 1, (byte) 1);
-        assertQueryResult("boolean", true, true);
-        assertQueryResult("date", "2017-07-01", "2017-07-01");
-        assertQueryResult("decimal", "2.15", "2.15");
-        assertQueryResult("real", 100.23456, (float) 100.23456);
-        assertQueryResult("double", 100.23456D, 100.23456);
-        assertQueryResult("interval day to second", "INTERVAL '2' DAY", "INTERVAL '2' DAY");
-        assertQueryResult("interval year to month", "INTERVAL '3' MONTH", "INTERVAL '3' MONTH");
-        assertQueryResult("timestamp", "2001-08-22 03:04:05.321", "2001-08-22 03:04:05.321");
-        assertQueryResult("timestamp with time zone", "2001-08-22 03:04:05.321 America/Los_Angeles", "2001-08-22 03:04:05.321 America/Los_Angeles");
-        assertQueryResult("time", "01:02:03.456", "01:02:03.456");
-        assertQueryResult("time with time zone", "01:02:03.456 America/Los_Angeles", "01:02:03.456 America/Los_Angeles");
-        assertQueryResult("varbinary", "garbage", Base64.getDecoder().decode("garbage"));
-        assertQueryResult("varchar", "teststring", "teststring");
-        assertQueryResult("char", "abc", "abc");
-        assertQueryResult("row(foo bigint,bar bigint)", ImmutableList.of(1, 2), ImmutableMap.of("foo", 1L, "bar", 2L));
-        assertQueryResult("array(bigint)", ImmutableList.of(1, 2, 4), ImmutableList.of(1L, 2L, 4L));
-        assertQueryResult("map(bigint,bigint)", ImmutableMap.of(1, 3, 2, 4), ImmutableMap.of(1L, 3L, 2L, 4L));
-        assertQueryResult("json", "{\"json\": {\"a\": 1}}", "{\"json\": {\"a\": 1}}");
-        assertQueryResult("ipaddress", "1.2.3.4", "1.2.3.4");
-    }
+    private static final JsonCodec<QueryResults> QUERY_RESULTS_CODEC = jsonCodec(QueryResults.class);
 
-    private void assertQueryResult(String type, Object data, Object expected)
+    @Test
+    public void testCompatibility()
     {
-        List<List<Object>> rows = newArrayList(QueryResults.fixData(
-                ImmutableList.of(new Column("test", type, new ClientTypeSignature(parseTypeSignature(type)))),
-                ImmutableList.of(ImmutableList.of(data))));
-        assertEquals(rows.size(), 1);
-        assertEquals(rows.get(0).size(), 1);
-        assertEquals(rows.get(0).get(0), expected);
+        String goldenValue = "{\n" +
+                "  \"id\" : \"20160128_214710_00012_rk68b\",\n" +
+                "  \"infoUri\" : \"http://localhost:54855/query.html?20160128_214710_00012_rk68b\",\n" +
+                "  \"columns\" : [ {\n" +
+                "    \"name\" : \"_col0\",\n" +
+                "    \"type\" : \"bigint\",\n" +
+                "    \"typeSignature\" : {\n" +
+                "      \"rawType\" : \"bigint\",\n" +
+                "      \"typeArguments\" : [ ],\n" +
+                "      \"literalArguments\" : [ ],\n" +
+                "      \"arguments\" : [ ]\n" +
+                "    }\n" +
+                "  } ],\n" +
+                "  \"data\" : [ [ 123 ] ],\n" +
+                "  \"stats\" : {\n" +
+                "    \"state\" : \"FINISHED\",\n" +
+                "    \"queued\" : false,\n" +
+                "    \"scheduled\" : false,\n" +
+                "    \"nodes\" : 0,\n" +
+                "    \"totalSplits\" : 0,\n" +
+                "    \"queuedSplits\" : 0,\n" +
+                "    \"runningSplits\" : 0,\n" +
+                "    \"completedSplits\" : 0,\n" +
+                "    \"cpuTimeMillis\" : 0,\n" +
+                "    \"wallTimeMillis\" : 0,\n" +
+                "    \"queuedTimeMillis\" : 0,\n" +
+                "    \"elapsedTimeMillis\" : 0,\n" +
+                "    \"processedRows\" : 0,\n" +
+                "    \"processedBytes\" : 0,\n" +
+                "    \"peakMemoryBytes\" : 0\n" +
+                "  }\n" +
+                "}";
+
+        QueryResults results = QUERY_RESULTS_CODEC.fromJson(goldenValue);
+        assertEquals(results.getId(), "20160128_214710_00012_rk68b");
     }
 }

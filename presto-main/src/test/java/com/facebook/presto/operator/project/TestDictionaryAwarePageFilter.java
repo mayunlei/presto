@@ -39,7 +39,6 @@ public class TestDictionaryAwarePageFilter
 {
     @Test
     public void testDelegateMethods()
-            throws Exception
     {
         DictionaryAwarePageFilter filter = new DictionaryAwarePageFilter(new TestDictionaryFilter(true));
         assertEquals(filter.isDeterministic(), true);
@@ -48,7 +47,6 @@ public class TestDictionaryAwarePageFilter
 
     @Test
     public void testSimpleBlock()
-            throws Exception
     {
         Block block = createLongSequenceBlock(0, 100);
         testFilter(block, LongArrayBlock.class);
@@ -56,7 +54,6 @@ public class TestDictionaryAwarePageFilter
 
     @Test
     public void testRleBlock()
-            throws Exception
     {
         testRleBlock(true);
         testRleBlock(false);
@@ -73,7 +70,6 @@ public class TestDictionaryAwarePageFilter
 
     @Test
     public void testRleBlockWithFailure()
-            throws Exception
     {
         DictionaryAwarePageFilter filter = createDictionaryAwarePageFilter(true, LongArrayBlock.class);
         RunLengthEncodedBlock fail = new RunLengthEncodedBlock(createLongSequenceBlock(-10, -9), 100);
@@ -82,7 +78,6 @@ public class TestDictionaryAwarePageFilter
 
     @Test
     public void testDictionaryBlock()
-            throws Exception
     {
         // match some
         testFilter(createDictionaryBlock(20, 100), LongArrayBlock.class);
@@ -96,14 +91,12 @@ public class TestDictionaryAwarePageFilter
 
     @Test
     public void testDictionaryBlockWithFailure()
-            throws Exception
     {
         assertThrows(NegativeValueException.class, () -> testFilter(createDictionaryBlockWithFailure(20, 100), LongArrayBlock.class));
     }
 
     @Test
     public void testDictionaryBlockProcessingWithUnusedFailure()
-            throws Exception
     {
         // match some
         testFilter(createDictionaryBlockWithUnusedEntries(20, 100), DictionaryBlock.class);
@@ -117,7 +110,6 @@ public class TestDictionaryAwarePageFilter
 
     @Test
     public void testDictionaryProcessingEnableDisable()
-            throws Exception
     {
         TestDictionaryFilter nestedFilter = new TestDictionaryFilter(true);
         DictionaryAwarePageFilter filter = new DictionaryAwarePageFilter(nestedFilter);
@@ -191,13 +183,11 @@ public class TestDictionaryAwarePageFilter
     {
         IntSet actualSelectedPositions = toSet(filter.filter(null, new Page(block)));
 
-        if (block instanceof LazyBlock) {
-            block = ((LazyBlock) block).getBlock();
-        }
+        block = block.getLoadedBlock();
 
         IntSet expectedSelectedPositions = new IntArraySet(block.getPositionCount());
         for (int position = 0; position < block.getPositionCount(); position++) {
-            if (isSelected(filterRange, block.getLong(position, 0))) {
+            if (isSelected(filterRange, block.getLong(position))) {
                 expectedSelectedPositions.add(position);
             }
         }
@@ -281,7 +271,7 @@ public class TestDictionaryAwarePageFilter
             boolean sequential = true;
             IntArrayList selectedPositions = new IntArrayList();
             for (int position = 0; position < block.getPositionCount(); position++) {
-                long value = block.getLong(position, 0);
+                long value = block.getLong(position);
                 verifyPositive(value);
 
                 boolean selected = isSelected(filterRange, value);

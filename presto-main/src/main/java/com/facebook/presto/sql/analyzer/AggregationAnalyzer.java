@@ -69,6 +69,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 
+import static com.facebook.presto.spi.function.FunctionKind.AGGREGATE;
 import static com.facebook.presto.sql.NodeUtils.getSortItemsFromOrderBy;
 import static com.facebook.presto.sql.analyzer.ExpressionTreeUtils.extractAggregateFunctions;
 import static com.facebook.presto.sql.analyzer.ExpressionTreeUtils.extractWindowFunctions;
@@ -81,7 +82,6 @@ import static com.facebook.presto.sql.analyzer.SemanticErrorCode.MUST_BE_AGGREGA
 import static com.facebook.presto.sql.analyzer.SemanticErrorCode.MUST_BE_AGGREGATION_FUNCTION;
 import static com.facebook.presto.sql.analyzer.SemanticErrorCode.NESTED_AGGREGATION;
 import static com.facebook.presto.sql.analyzer.SemanticErrorCode.NESTED_WINDOW;
-import static com.facebook.presto.sql.analyzer.SemanticErrorCode.NOT_SUPPORTED;
 import static com.facebook.presto.sql.analyzer.SemanticErrorCode.ORDER_BY_MUST_BE_IN_AGGREGATE;
 import static com.facebook.presto.sql.analyzer.SemanticErrorCode.REFERENCE_TO_OUTPUT_ATTRIBUTE_WITHIN_ORDER_BY_AGGREGATION;
 import static com.facebook.presto.sql.analyzer.SemanticErrorCode.REFERENCE_TO_OUTPUT_ATTRIBUTE_WITHIN_ORDER_BY_GROUPING;
@@ -314,9 +314,9 @@ class AggregationAnalyzer
         @Override
         protected Boolean visitFunctionCall(FunctionCall node, Void context)
         {
-            if (metadata.isAggregationFunction(node.getName())) {
+            if (metadata.getFunctionManager().getFunctionMetadata(analysis.getFunctionHandle(node)).getFunctionKind() == AGGREGATE) {
                 if (!node.getWindow().isPresent()) {
-                    List<FunctionCall> aggregateFunctions = extractAggregateFunctions(node.getArguments(), metadata.getFunctionRegistry());
+                    List<FunctionCall> aggregateFunctions = extractAggregateFunctions(analysis.getFunctionHandles(), node.getArguments(), metadata.getFunctionManager());
                     List<FunctionCall> windowFunctions = extractWindowFunctions(node.getArguments());
 
                     if (!aggregateFunctions.isEmpty()) {
@@ -333,13 +333,6 @@ class AggregationAnalyzer
                                 "Cannot nest window functions inside aggregation '%s': %s",
                                 node.getName(),
                                 windowFunctions);
-                    }
-
-                    if (node.getFilter().isPresent() && node.isDistinct()) {
-                        throw new SemanticException(NOT_SUPPORTED,
-                                node,
-                                "Filtered aggregations not supported with DISTINCT: '%s'",
-                                node);
                     }
 
                     if (node.getOrderBy().isPresent()) {

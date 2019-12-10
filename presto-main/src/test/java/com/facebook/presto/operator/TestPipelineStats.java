@@ -13,11 +13,11 @@
  */
 package com.facebook.presto.operator;
 
+import com.facebook.airlift.json.JsonCodec;
+import com.facebook.airlift.stats.Distribution;
+import com.facebook.airlift.stats.Distribution.DistributionSnapshot;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
-import io.airlift.json.JsonCodec;
-import io.airlift.stats.Distribution;
-import io.airlift.stats.Distribution.DistributionSnapshot;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 import org.joda.time.DateTime;
@@ -59,7 +59,6 @@ public class TestPipelineStats
 
             new Duration(10, NANOSECONDS),
             new Duration(11, NANOSECONDS),
-            new Duration(12, NANOSECONDS),
             new Duration(13, NANOSECONDS),
             false,
             ImmutableSet.of(),
@@ -72,6 +71,8 @@ public class TestPipelineStats
 
             new DataSize(18, BYTE),
             19,
+
+            new DataSize(20, BYTE),
 
             ImmutableList.of(TestOperatorStats.EXPECTED),
             ImmutableList.of(TestDriverStats.EXPECTED));
@@ -103,7 +104,7 @@ public class TestPipelineStats
         assertEquals(actual.getBlockedDrivers(), 19);
         assertEquals(actual.getCompletedDrivers(), 4);
 
-        assertEquals(actual.getMemoryReservation(), new DataSize(5, BYTE));
+        assertEquals(actual.getUserMemoryReservation(), new DataSize(5, BYTE));
         assertEquals(actual.getRevocableMemoryReservation(), new DataSize(6, BYTE));
         assertEquals(actual.getSystemMemoryReservation(), new DataSize(7, BYTE));
 
@@ -112,7 +113,6 @@ public class TestPipelineStats
 
         assertEquals(actual.getTotalScheduledTime(), new Duration(10, NANOSECONDS));
         assertEquals(actual.getTotalCpuTime(), new Duration(11, NANOSECONDS));
-        assertEquals(actual.getTotalUserTime(), new Duration(12, NANOSECONDS));
         assertEquals(actual.getTotalBlockedTime(), new Duration(13, NANOSECONDS));
 
         assertEquals(actual.getRawInputDataSize(), new DataSize(14, BYTE));
@@ -123,6 +123,8 @@ public class TestPipelineStats
 
         assertEquals(actual.getOutputDataSize(), new DataSize(18, BYTE));
         assertEquals(actual.getOutputPositions(), 19);
+
+        assertEquals(actual.getPhysicalWrittenDataSize(), new DataSize(20, BYTE));
 
         assertEquals(actual.getOperatorSummaries().size(), 1);
         assertExpectedOperatorStats(actual.getOperatorSummaries().get(0));

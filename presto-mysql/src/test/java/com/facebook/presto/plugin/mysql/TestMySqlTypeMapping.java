@@ -13,57 +13,91 @@
  */
 package com.facebook.presto.plugin.mysql;
 
+import com.facebook.presto.Session;
+import com.facebook.presto.spi.type.TimeZoneKey;
 import com.facebook.presto.spi.type.VarcharType;
+import com.facebook.presto.testing.mysql.MySqlOptions;
+import com.facebook.presto.testing.mysql.TestingMySqlServer;
 import com.facebook.presto.tests.AbstractTestQueryFramework;
 import com.facebook.presto.tests.datatype.CreateAndInsertDataSetup;
 import com.facebook.presto.tests.datatype.CreateAsSelectDataSetup;
 import com.facebook.presto.tests.datatype.DataSetup;
-import com.facebook.presto.tests.datatype.DataType;
 import com.facebook.presto.tests.datatype.DataTypeTest;
 import com.facebook.presto.tests.sql.JdbcSqlExecutor;
 import com.facebook.presto.tests.sql.PrestoSqlExecutor;
-import io.airlift.testing.mysql.TestingMySqlServer;
-import io.airlift.tpch.TpchTable;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
+import io.airlift.units.Duration;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.Test;
 
+import java.io.IOException;
 import java.math.BigDecimal;
-import java.sql.SQLException;
+import java.time.LocalDate;
+import java.time.ZoneId;
 
 import static com.facebook.presto.plugin.mysql.MySqlQueryRunner.createMySqlQueryRunner;
+import static com.facebook.presto.spi.type.TimeZoneKey.UTC_KEY;
 import static com.facebook.presto.spi.type.VarcharType.createUnboundedVarcharType;
 import static com.facebook.presto.spi.type.VarcharType.createVarcharType;
+import static com.facebook.presto.tests.datatype.DataType.bigintDataType;
 import static com.facebook.presto.tests.datatype.DataType.charDataType;
+import static com.facebook.presto.tests.datatype.DataType.dateDataType;
+import static com.facebook.presto.tests.datatype.DataType.decimalDataType;
+import static com.facebook.presto.tests.datatype.DataType.doubleDataType;
+import static com.facebook.presto.tests.datatype.DataType.integerDataType;
+import static com.facebook.presto.tests.datatype.DataType.realDataType;
+import static com.facebook.presto.tests.datatype.DataType.smallintDataType;
 import static com.facebook.presto.tests.datatype.DataType.stringDataType;
+import static com.facebook.presto.tests.datatype.DataType.tinyintDataType;
 import static com.facebook.presto.tests.datatype.DataType.varcharDataType;
+import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Strings.repeat;
+import static com.google.common.base.Verify.verify;
 import static java.lang.String.format;
+import static java.util.concurrent.TimeUnit.SECONDS;
 
 @Test
 public class TestMySqlTypeMapping
         extends AbstractTestQueryFramework
 {
     private static final String CHARACTER_SET_UTF8 = "CHARACTER SET utf8";
+    private static final MySqlOptions MY_SQL_OPTIONS = MySqlOptions.builder()
+            .setCommandTimeout(new Duration(90, SECONDS))
+            .build();
 
     private final TestingMySqlServer mysqlServer;
 
     public TestMySqlTypeMapping()
             throws Exception
     {
-        this(new TestingMySqlServer("testuser", "testpass", "tpch"));
+        this(new TestingMySqlServer("testuser", "testpass", ImmutableList.of("tpch"), MY_SQL_OPTIONS));
     }
 
     private TestMySqlTypeMapping(TestingMySqlServer mysqlServer)
-            throws Exception
     {
-        super(() -> createMySqlQueryRunner(mysqlServer, TpchTable.getTables()));
+        super(() -> createMySqlQueryRunner(mysqlServer, ImmutableMap.of(), ImmutableList.of()));
         this.mysqlServer = mysqlServer;
     }
 
     @AfterClass(alwaysRun = true)
     public final void destroy()
+            throws IOException
     {
         mysqlServer.close();
+    }
+
+    @Test
+    public void testBasicTypes()
+    {
+        DataTypeTest.create()
+                .addRoundTrip(bigintDataType(), 123_456_789_012L)
+                .addRoundTrip(integerDataType(), 1_234_567_890)
+                .addRoundTrip(smallintDataType(), (short) 32_456)
+                .addRoundTrip(tinyintDataType(), (byte) 125)
+                .addRoundTrip(doubleDataType(), 123.45d)
+                .addRoundTrip(realDataType(), 123.45f)
+                .execute(getQueryRunner(), prestoCreateAsSelect("test_basic_types"));
     }
 
     @Test
@@ -91,7 +125,7 @@ public class TestMySqlTypeMapping
                 .addRoundTrip(stringDataType("mediumtext", createVarcharType(16777215)), "c")
                 .addRoundTrip(stringDataType("longtext", createUnboundedVarcharType()), "d")
                 .addRoundTrip(varcharDataType(32), "e")
-                .addRoundTrip(varcharDataType(20000), "f")
+                .addRoundTrip(varcharDataType(15000), "f")
                 .execute(getQueryRunner(), mysqlCreateAndInsert("tpch.mysql_test_parameterized_varchar"));
     }
 
@@ -163,26 +197,78 @@ public class TestMySqlTypeMapping
     private DataTypeTest decimalTests()
     {
         return DataTypeTest.create()
-                .addRoundTrip(DataType.decimalType(3, 0), new BigDecimal("193"))
-                .addRoundTrip(DataType.decimalType(3, 0), new BigDecimal("19"))
-                .addRoundTrip(DataType.decimalType(3, 0), new BigDecimal("-193"))
-                .addRoundTrip(DataType.decimalType(3, 1), new BigDecimal("10.1"))
-                .addRoundTrip(DataType.decimalType(3, 1), new BigDecimal("-10.1"))
-                .addRoundTrip(DataType.decimalType(30, 5), new BigDecimal("3141592653589793238462643.38327"))
-                .addRoundTrip(DataType.decimalType(30, 5), new BigDecimal("-3141592653589793238462643.38327"))
-                .addRoundTrip(DataType.decimalType(38, 0), new BigDecimal("27182818284590452353602874713526624977"))
-                .addRoundTrip(DataType.decimalType(38, 0), new BigDecimal("-27182818284590452353602874713526624977"));
+                .addRoundTrip(decimalDataType(3, 0), new BigDecimal("193"))
+                .addRoundTrip(decimalDataType(3, 0), new BigDecimal("19"))
+                .addRoundTrip(decimalDataType(3, 0), new BigDecimal("-193"))
+                .addRoundTrip(decimalDataType(3, 1), new BigDecimal("10.0"))
+                .addRoundTrip(decimalDataType(3, 1), new BigDecimal("10.1"))
+                .addRoundTrip(decimalDataType(3, 1), new BigDecimal("-10.1"))
+                .addRoundTrip(decimalDataType(4, 2), new BigDecimal("2"))
+                .addRoundTrip(decimalDataType(4, 2), new BigDecimal("2.3"))
+                .addRoundTrip(decimalDataType(24, 2), new BigDecimal("2"))
+                .addRoundTrip(decimalDataType(24, 2), new BigDecimal("2.3"))
+                .addRoundTrip(decimalDataType(24, 2), new BigDecimal("123456789.3"))
+                .addRoundTrip(decimalDataType(24, 4), new BigDecimal("12345678901234567890.31"))
+                .addRoundTrip(decimalDataType(30, 5), new BigDecimal("3141592653589793238462643.38327"))
+                .addRoundTrip(decimalDataType(30, 5), new BigDecimal("-3141592653589793238462643.38327"))
+                .addRoundTrip(decimalDataType(38, 0), new BigDecimal("27182818284590452353602874713526624977"))
+                .addRoundTrip(decimalDataType(38, 0), new BigDecimal("-27182818284590452353602874713526624977"));
     }
 
     @Test
     public void testDecimalExceedingPrecisionMax()
-            throws SQLException
     {
         testUnsupportedDataType("decimal(50,0)");
     }
 
+    @Test
+    public void testDate()
+    {
+        // Note: there is identical test for PostgreSQL
+
+        ZoneId jvmZone = ZoneId.systemDefault();
+        checkState(jvmZone.getId().equals("America/Bahia_Banderas"), "This test assumes certain JVM time zone");
+        LocalDate dateOfLocalTimeChangeForwardAtMidnightInJvmZone = LocalDate.of(1970, 1, 1);
+        verify(jvmZone.getRules().getValidOffsets(dateOfLocalTimeChangeForwardAtMidnightInJvmZone.atStartOfDay()).isEmpty());
+
+        ZoneId someZone = ZoneId.of("Europe/Vilnius");
+        LocalDate dateOfLocalTimeChangeForwardAtMidnightInSomeZone = LocalDate.of(1983, 4, 1);
+        verify(someZone.getRules().getValidOffsets(dateOfLocalTimeChangeForwardAtMidnightInSomeZone.atStartOfDay()).isEmpty());
+        LocalDate dateOfLocalTimeChangeBackwardAtMidnightInSomeZone = LocalDate.of(1983, 10, 1);
+        verify(someZone.getRules().getValidOffsets(dateOfLocalTimeChangeBackwardAtMidnightInSomeZone.atStartOfDay().minusMinutes(1)).size() == 2);
+
+        DataTypeTest testCases = DataTypeTest.create()
+                .addRoundTrip(dateDataType(), LocalDate.of(1952, 4, 3)) // before epoch
+                .addRoundTrip(dateDataType(), LocalDate.of(1970, 1, 1))
+                .addRoundTrip(dateDataType(), LocalDate.of(1970, 2, 3))
+                .addRoundTrip(dateDataType(), LocalDate.of(2017, 7, 1)) // summer on northern hemisphere (possible DST)
+                .addRoundTrip(dateDataType(), LocalDate.of(2017, 1, 1)) // winter on northern hemisphere (possible DST on southern hemisphere)
+                .addRoundTrip(dateDataType(), dateOfLocalTimeChangeForwardAtMidnightInJvmZone)
+                .addRoundTrip(dateDataType(), dateOfLocalTimeChangeForwardAtMidnightInSomeZone)
+                .addRoundTrip(dateDataType(), dateOfLocalTimeChangeBackwardAtMidnightInSomeZone);
+
+        for (String timeZoneId : ImmutableList.of(UTC_KEY.getId(), jvmZone.getId(), someZone.getId())) {
+            Session session = Session.builder(getQueryRunner().getDefaultSession())
+                    .setTimeZoneKey(TimeZoneKey.getTimeZoneKey(timeZoneId))
+                    .build();
+            testCases.execute(getQueryRunner(), session, mysqlCreateAndInsert("tpch.test_date"));
+            testCases.execute(getQueryRunner(), session, prestoCreateAsSelect("test_date"));
+        }
+    }
+
+    @Test
+    public void testDatetime()
+    {
+        // TODO MySQL datetime is not correctly read (see comment in StandardReadMappings.timestampReadMapping), but testing this is hard because of #7122
+    }
+
+    @Test
+    public void testTimestamp()
+    {
+        // TODO MySQL timestamp is not correctly read (see comment in StandardReadMappings.timestampReadMapping), but testing this is hard because of #7122
+    }
+
     private void testUnsupportedDataType(String databaseDataType)
-            throws SQLException
     {
         JdbcSqlExecutor jdbcSqlExecutor = new JdbcSqlExecutor(mysqlServer.getJdbcUrl());
         jdbcSqlExecutor.execute(format("CREATE TABLE tpch.test_unsupported_data_type(supported_column varchar(5), unsupported_column %s)", databaseDataType));

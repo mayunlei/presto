@@ -15,7 +15,8 @@ package com.facebook.presto.spi.block;
 
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PrestoException;
-import com.facebook.presto.spi.security.Identity;
+import com.facebook.presto.spi.function.SqlFunctionProperties;
+import com.facebook.presto.spi.security.ConnectorIdentity;
 import com.facebook.presto.spi.type.TimeZoneKey;
 
 import java.util.Locale;
@@ -42,15 +43,21 @@ public final class TestingSession
         }
 
         @Override
-        public Identity getIdentity()
+        public ConnectorIdentity getIdentity()
         {
-            return new Identity("user", Optional.empty());
+            return new ConnectorIdentity("user", Optional.empty(), Optional.empty());
         }
 
         @Override
         public TimeZoneKey getTimeZoneKey()
         {
             return UTC_KEY;
+        }
+
+        @Override
+        public Optional<String> getClientInfo()
+        {
+            return Optional.of("TestClientInfo");
         }
 
         @Override
@@ -63,6 +70,24 @@ public final class TestingSession
         public long getStartTime()
         {
             return 0;
+        }
+
+        @Override
+        public Optional<String> getTraceToken()
+        {
+            return Optional.empty();
+        }
+
+        @Override
+        public boolean isLegacyTimestamp()
+        {
+            return true;
+        }
+
+        @Override
+        public SqlFunctionProperties getSqlFunctionProperties()
+        {
+            return SqlFunctionProperties.builder().setTimeZoneKey(UTC_KEY).build();
         }
 
         @Override

@@ -1,4 +1,4 @@
--- database: presto_tpcds; groups: tpcds; requires: com.teradata.tempto.fulfillment.table.hive.tpcds.ImmutableTpcdsTablesRequirements
+-- database: presto_tpcds; groups: tpcds; requires: io.prestodb.tempto.fulfillment.table.hive.tpcds.ImmutableTpcdsTablesRequirements
 SELECT
   "i_item_id"
 , "ca_country"
@@ -24,7 +24,7 @@ WHERE ("cs_sold_date_sk" = "d_date_sk")
    AND ("cs_bill_cdemo_sk" = "cd1"."cd_demo_sk")
    AND ("cs_bill_customer_sk" = "c_customer_sk")
    AND ("cd1"."cd_gender" = 'F')
-   AND ("cd1"."cd_education_status" = 'Unknown             ')
+   AND ("cd1"."cd_education_status" = 'Unknown')
    AND ("c_current_cdemo_sk" = "cd2"."cd_demo_sk")
    AND ("c_current_addr_sk" = "ca_address_sk")
    AND ("c_birth_month" IN (1, 6, 8, 9, 12, 2))

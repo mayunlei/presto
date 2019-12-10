@@ -13,14 +13,14 @@
  */
 package com.facebook.presto.client;
 
-import io.airlift.json.JsonCodec;
+import com.facebook.airlift.json.JsonCodec;
 import io.airlift.units.Duration;
 import org.testng.annotations.Test;
 
 import java.util.Optional;
 
+import static com.facebook.airlift.json.JsonCodec.jsonCodec;
 import static com.facebook.presto.client.NodeVersion.UNKNOWN;
-import static io.airlift.json.JsonCodec.jsonCodec;
 import static org.testng.Assert.assertEquals;
 
 public class TestServerInfo
@@ -30,14 +30,14 @@ public class TestServerInfo
     @Test
     public void testJsonRoundTrip()
     {
-        assertJsonRoundTrip(new ServerInfo(UNKNOWN, "test", true, Optional.of(Duration.valueOf("2m"))));
-        assertJsonRoundTrip(new ServerInfo(UNKNOWN, "test", true, Optional.empty()));
+        assertJsonRoundTrip(new ServerInfo(UNKNOWN, "test", true, false, Optional.of(Duration.valueOf("2m"))));
+        assertJsonRoundTrip(new ServerInfo(UNKNOWN, "test", true, false, Optional.empty()));
     }
 
     @Test
     public void testBackwardsCompatible()
     {
-        ServerInfo newServerInfo = new ServerInfo(UNKNOWN, "test", true, Optional.empty());
+        ServerInfo newServerInfo = new ServerInfo(UNKNOWN, "test", true, false, Optional.empty());
         ServerInfo legacyServerInfo = SERVER_INFO_CODEC.fromJson("{\"nodeVersion\":{\"version\":\"<unknown>\"},\"environment\":\"test\",\"coordinator\":true}");
         assertEquals(newServerInfo, legacyServerInfo);
     }

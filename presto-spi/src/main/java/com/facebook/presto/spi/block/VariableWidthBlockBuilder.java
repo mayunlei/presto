@@ -17,20 +17,25 @@ import io.airlift.slice.DynamicSliceOutput;
 import io.airlift.slice.Slice;
 import io.airlift.slice.SliceOutput;
 import io.airlift.slice.Slices;
+import io.airlift.slice.UnsafeSlice;
 import org.openjdk.jol.info.ClassLayout;
 
 import javax.annotation.Nullable;
 
 import java.util.Arrays;
-import java.util.List;
 import java.util.function.BiConsumer;
 
 import static com.facebook.presto.spi.block.BlockUtil.MAX_ARRAY_SIZE;
 import static com.facebook.presto.spi.block.BlockUtil.calculateBlockResetBytes;
 import static com.facebook.presto.spi.block.BlockUtil.calculateBlockResetSize;
+import static com.facebook.presto.spi.block.BlockUtil.checkArrayRange;
+import static com.facebook.presto.spi.block.BlockUtil.checkValidPosition;
+import static com.facebook.presto.spi.block.BlockUtil.checkValidPositions;
+import static com.facebook.presto.spi.block.BlockUtil.checkValidRegion;
 import static com.facebook.presto.spi.block.BlockUtil.compactArray;
 import static com.facebook.presto.spi.block.BlockUtil.compactOffsets;
 import static com.facebook.presto.spi.block.BlockUtil.compactSlice;
+import static com.facebook.presto.spi.block.BlockUtil.internalPositionInRange;
 import static io.airlift.slice.SizeOf.SIZE_OF_BYTE;
 import static io.airlift.slice.SizeOf.SIZE_OF_INT;
 import static io.airlift.slice.SizeOf.SIZE_OF_LONG;
@@ -52,6 +57,7 @@ public class VariableWidthBlockBuilder
 
     private SliceOutput sliceOutput = new DynamicSliceOutput(0);
 
+    private boolean hasNullValue;
     // it is assumed that the offsets array is one position longer than the valueIsNull array
     private boolean[] valueIsNull = new boolean[0];
     private int[] offsets = new int[1];
@@ -72,25 +78,21 @@ public class VariableWidthBlockBuilder
     }
 
     @Override
-    protected int getPositionOffset(int position)
+    public int getPositionOffset(int position)
     {
-        if (position >= positions) {
-            throw new IllegalArgumentException("position " + position + " must be less than position count " + positions);
-        }
+        checkValidPosition(position, positions);
         return getOffset(position);
     }
 
     @Override
     public int getSliceLength(int position)
     {
-        if (position >= positions) {
-            throw new IllegalArgumentException("position " + position + " must be less than position count " + positions);
-        }
+        checkValidPosition(position, positions);
         return getOffset((position + 1)) - getOffset(position);
     }
 
     @Override
-    protected Slice getRawSlice(int position)
+    public Slice getRawSlice(int position)
     {
         return sliceOutput.getUnderlyingSlice();
     }
@@ -112,11 +114,24 @@ public class VariableWidthBlockBuilder
     public long getRegionSizeInBytes(int positionOffset, int length)
     {
         int positionCount = getPositionCount();
-        if (positionOffset < 0 || length < 0 || positionOffset + length > positionCount) {
-            throw new IndexOutOfBoundsException("Invalid position " + positionOffset + " length " + length + " in block with " + positionCount + " positions");
-        }
+        checkValidRegion(positionCount, positionOffset, length);
         long arraysSizeInBytes = (Integer.BYTES + Byte.BYTES) * (long) length;
         return getOffset(positionOffset + length) - getOffset(positionOffset) + arraysSizeInBytes;
+    }
+
+    @Override
+    public long getPositionsSizeInBytes(boolean[] positions)
+    {
+        checkValidPositions(positions, getPositionCount());
+        long sizeInBytes = 0;
+        int usedPositionCount = 0;
+        for (int i = 0; i < positions.length; ++i) {
+            if (positions[i]) {
+                usedPositionCount++;
+                sizeInBytes += getOffset(i + 1) - getOffset(i);
+            }
+        }
+        return sizeInBytes + (Integer.BYTES + Byte.BYTES) * (long) usedPositionCount;
     }
 
     @Override
@@ -139,24 +154,32 @@ public class VariableWidthBlockBuilder
     }
 
     @Override
-    public Block copyPositions(List<Integer> positions)
+    public Block copyPositions(int[] positions, int offset, int length)
     {
-        int finalLength = positions.stream().mapToInt(this::getSliceLength).sum();
-        SliceOutput newSlice = Slices.allocate(finalLength).getOutput();
-        int[] newOffsets = new int[positions.size() + 1];
-        boolean[] newValueIsNull = new boolean[positions.size()];
+        checkArrayRange(positions, offset, length);
 
-        for (int i = 0; i < positions.size(); i++) {
-            int position = positions.get(i);
+        int finalLength = 0;
+        for (int i = offset; i < offset + length; i++) {
+            finalLength += getSliceLength(positions[i]);
+        }
+        SliceOutput newSlice = Slices.allocate(finalLength).getOutput();
+        int[] newOffsets = new int[length + 1];
+        boolean[] newValueIsNull = null;
+        if (hasNullValue) {
+            newValueIsNull = new boolean[length];
+        }
+
+        for (int i = 0; i < length; i++) {
+            int position = positions[offset + i];
             if (isEntryNull(position)) {
                 newValueIsNull[i] = true;
             }
             else {
-                newSlice.appendBytes(sliceOutput.getUnderlyingSlice().getBytes(getPositionOffset(position), getSliceLength(position)));
+                newSlice.writeBytes(sliceOutput.getUnderlyingSlice(), getPositionOffset(position), getSliceLength(position));
             }
             newOffsets[i + 1] = newSlice.size();
         }
-        return new VariableWidthBlock(positions.size(), newSlice.slice(), newOffsets, newValueIsNull);
+        return new VariableWidthBlock(0, length, newSlice.slice(), newOffsets, newValueIsNull);
     }
 
     @Override
@@ -229,6 +252,7 @@ public class VariableWidthBlockBuilder
             throw new IllegalStateException("Current entry must be closed before a null can be written");
         }
 
+        hasNullValue = true;
         entryAdded(0, true);
         return this;
     }
@@ -278,6 +302,12 @@ public class VariableWidthBlockBuilder
     }
 
     @Override
+    public boolean mayHaveNull()
+    {
+        return hasNullValue;
+    }
+
+    @Override
     protected boolean isEntryNull(int position)
     {
         return valueIsNull[position];
@@ -287,26 +317,25 @@ public class VariableWidthBlockBuilder
     public Block getRegion(int positionOffset, int length)
     {
         int positionCount = getPositionCount();
-        if (positionOffset < 0 || length < 0 || positionOffset + length > positionCount) {
-            throw new IndexOutOfBoundsException("Invalid position " + positionOffset + " in block with " + positionCount + " positions");
-        }
+        checkValidRegion(positionCount, positionOffset, length);
 
-        return new VariableWidthBlock(positionOffset, length, sliceOutput.slice(), offsets, valueIsNull);
+        return new VariableWidthBlock(positionOffset, length, sliceOutput.slice(), offsets, hasNullValue ? valueIsNull : null);
     }
 
     @Override
     public Block copyRegion(int positionOffset, int length)
     {
         int positionCount = getPositionCount();
-        if (positionOffset < 0 || length < 0 || positionOffset + length > positionCount) {
-            throw new IndexOutOfBoundsException("Invalid position " + positionOffset + " in block with " + positionCount + " positions");
-        }
+        checkValidRegion(positionCount, positionOffset, length);
 
         int[] newOffsets = compactOffsets(offsets, positionOffset, length);
-        boolean[] newValueIsNull = compactArray(valueIsNull, positionOffset, length);
+        boolean[] newValueIsNull = null;
+        if (hasNullValue) {
+            newValueIsNull = compactArray(valueIsNull, positionOffset, length);
+        }
         Slice slice = compactSlice(sliceOutput.getUnderlyingSlice(), offsets[positionOffset], newOffsets[length]);
 
-        return new VariableWidthBlock(length, slice, newOffsets, newValueIsNull);
+        return new VariableWidthBlock(0, length, slice, newOffsets, newValueIsNull);
     }
 
     @Override
@@ -315,7 +344,7 @@ public class VariableWidthBlockBuilder
         if (currentEntrySize > 0) {
             throw new IllegalStateException("Current entry must be closed before the block can be built");
         }
-        return new VariableWidthBlock(positions, sliceOutput.slice(), offsets, valueIsNull);
+        return new VariableWidthBlock(0, positions, sliceOutput.slice(), offsets, hasNullValue ? valueIsNull : null);
     }
 
     @Override
@@ -338,5 +367,68 @@ public class VariableWidthBlockBuilder
         sb.append(", size=").append(sliceOutput.size());
         sb.append('}');
         return sb.toString();
+    }
+
+    @Override
+    public byte getByteUnchecked(int internalPosition)
+    {
+        assert internalPositionInRange(internalPosition, getOffsetBase(), getPositionCount());
+        return UnsafeSlice.getByteUnchecked(getRawSlice(internalPosition), offsets[internalPosition]);
+    }
+
+    @Override
+    public short getShortUnchecked(int internalPosition)
+    {
+        assert internalPositionInRange(internalPosition, getOffsetBase(), getPositionCount());
+        return UnsafeSlice.getShortUnchecked(getRawSlice(internalPosition), offsets[internalPosition]);
+    }
+
+    @Override
+    public int getIntUnchecked(int internalPosition)
+    {
+        assert internalPositionInRange(internalPosition, getOffsetBase(), getPositionCount());
+        return UnsafeSlice.getIntUnchecked(getRawSlice(internalPosition), offsets[internalPosition]);
+    }
+
+    @Override
+    public long getLongUnchecked(int internalPosition)
+    {
+        assert internalPositionInRange(internalPosition, getOffsetBase(), getPositionCount());
+        return UnsafeSlice.getLongUnchecked(getRawSlice(internalPosition), offsets[internalPosition]);
+    }
+
+    @Override
+    public long getLongUnchecked(int internalPosition, int offset)
+    {
+        assert internalPositionInRange(internalPosition, getOffsetBase(), getPositionCount());
+        return UnsafeSlice.getLongUnchecked(getRawSlice(internalPosition), offsets[internalPosition] + offset);
+    }
+
+    @Override
+    public Slice getSliceUnchecked(int internalPosition, int offset, int length)
+    {
+        assert internalPositionInRange(internalPosition, getOffsetBase(), getPositionCount());
+        return getRawSlice(internalPosition).slice(offsets[internalPosition] + offset, length);
+    }
+
+    @Override
+    public int getSliceLengthUnchecked(int internalPosition)
+    {
+        assert internalPositionInRange(internalPosition, getOffsetBase(), getPositionCount());
+        return offsets[internalPosition + 1] - offsets[internalPosition];
+    }
+
+    @Override
+    public boolean isNullUnchecked(int internalPosition)
+    {
+        assert mayHaveNull() : "no nulls present";
+        assert internalPositionInRange(internalPosition, getOffsetBase(), getPositionCount());
+        return valueIsNull[internalPosition];
+    }
+
+    @Override
+    public int getOffsetBase()
+    {
+        return 0;
     }
 }

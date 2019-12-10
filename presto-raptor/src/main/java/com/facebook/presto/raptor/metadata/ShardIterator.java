@@ -13,12 +13,12 @@
  */
 package com.facebook.presto.raptor.metadata;
 
+import com.facebook.airlift.log.Logger;
 import com.facebook.presto.raptor.RaptorColumnHandle;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.predicate.TupleDomain;
 import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.ImmutableSet;
-import io.airlift.log.Logger;
 import org.skife.jdbi.v2.IDBI;
 import org.skife.jdbi.v2.ResultIterator;
 
@@ -54,7 +54,7 @@ final class ShardIterator
     private final Map<Integer, String> nodeMap = new HashMap<>();
 
     private final boolean merged;
-    private final Map<Integer, String> bucketToNode;
+    private final List<String> bucketToNode;
     private final ShardDao dao;
     private final Connection connection;
     private final PreparedStatement statement;
@@ -64,13 +64,13 @@ final class ShardIterator
     public ShardIterator(
             long tableId,
             boolean merged,
-            Optional<Map<Integer, String>> bucketToNode,
+            Optional<List<String>> bucketToNode,
             TupleDomain<RaptorColumnHandle> effectivePredicate,
             IDBI dbi)
     {
         this.merged = merged;
         this.bucketToNode = bucketToNode.orElse(null);
-        ShardPredicate predicate = ShardPredicate.create(effectivePredicate, bucketToNode.isPresent());
+        ShardPredicate predicate = ShardPredicate.create(effectivePredicate);
 
         String sql;
         if (bucketToNode.isPresent()) {

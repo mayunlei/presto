@@ -13,14 +13,14 @@
  */
 package com.facebook.presto.operator;
 
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.MetadataManager;
-import com.facebook.presto.metadata.Signature;
 import com.facebook.presto.operator.project.PageProcessor;
 import com.facebook.presto.spi.Page;
+import com.facebook.presto.spi.plan.PlanNodeId;
+import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.sql.gen.ExpressionCompiler;
 import com.facebook.presto.sql.gen.PageFunctionCompiler;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
-import com.facebook.presto.sql.relational.RowExpression;
 import com.facebook.presto.testing.MaterializedResult;
 import com.google.common.collect.ImmutableList;
 import io.airlift.units.DataSize;
@@ -34,6 +34,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Supplier;
 
+import static com.facebook.airlift.concurrent.Threads.daemonThreadsNamed;
 import static com.facebook.presto.RowPagesBuilder.rowPagesBuilder;
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
 import static com.facebook.presto.metadata.MetadataManager.createTestMetadataManager;
@@ -44,11 +45,11 @@ import static com.facebook.presto.spi.function.OperatorType.EQUAL;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
+import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static com.facebook.presto.sql.relational.Expressions.call;
 import static com.facebook.presto.sql.relational.Expressions.constant;
 import static com.facebook.presto.sql.relational.Expressions.field;
 import static com.facebook.presto.testing.TestingTaskContext.createTaskContext;
-import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.airlift.units.DataSize.Unit.BYTE;
 import static io.airlift.units.DataSize.Unit.KILOBYTE;
 import static java.util.concurrent.Executors.newCachedThreadPool;
@@ -68,7 +69,7 @@ public class TestFilterAndProjectOperator
         scheduledExecutor = newScheduledThreadPool(2, daemonThreadsNamed("test-scheduledExecutor-%s"));
 
         driverContext = createTaskContext(executor, scheduledExecutor, TEST_SESSION)
-                .addPipelineContext(0, true, true)
+                .addPipelineContext(0, true, true, false)
                 .addDriverContext();
     }
 
@@ -81,14 +82,16 @@ public class TestFilterAndProjectOperator
 
     @Test
     public void test()
-            throws Exception
     {
         List<Page> input = rowPagesBuilder(VARCHAR, BIGINT)
                 .addSequencePage(100, 0, 0)
                 .build();
 
+        MetadataManager metadata = createTestMetadataManager();
+        FunctionManager functionManager = metadata.getFunctionManager();
         RowExpression filter = call(
-                Signature.internalOperator(BETWEEN, BOOLEAN.getTypeSignature(), ImmutableList.of(BIGINT.getTypeSignature(), BIGINT.getTypeSignature(), BIGINT.getTypeSignature())),
+                BETWEEN.name(),
+                functionManager.resolveOperator(BETWEEN, fromTypes(BIGINT, BIGINT, BIGINT)),
                 BOOLEAN,
                 field(1, BIGINT),
                 constant(10L, BIGINT),
@@ -96,14 +99,14 @@ public class TestFilterAndProjectOperator
 
         RowExpression field0 = field(0, VARCHAR);
         RowExpression add5 = call(
-                Signature.internalOperator(ADD, BIGINT.getTypeSignature(), ImmutableList.of(BIGINT.getTypeSignature(), BIGINT.getTypeSignature())),
+                ADD.name(),
+                functionManager.resolveOperator(ADD, fromTypes(BIGINT, BIGINT)),
                 BIGINT,
                 field(1, BIGINT),
                 constant(5L, BIGINT));
 
-        MetadataManager metadata = createTestMetadataManager();
         ExpressionCompiler compiler = new ExpressionCompiler(metadata, new PageFunctionCompiler(metadata, 0));
-        Supplier<PageProcessor> processor = compiler.compilePageProcessor(Optional.of(filter), ImmutableList.of(field0, add5));
+        Supplier<PageProcessor> processor = compiler.compilePageProcessor(TEST_SESSION.getSqlFunctionProperties(), Optional.of(filter), ImmutableList.of(field0, add5));
 
         OperatorFactory operatorFactory = new FilterAndProjectOperator.FilterAndProjectOperatorFactory(
                 0,
@@ -131,7 +134,6 @@ public class TestFilterAndProjectOperator
 
     @Test
     public void testMergeOutput()
-            throws Exception
     {
         List<Page> input = rowPagesBuilder(VARCHAR, BIGINT)
                 .addSequencePage(100, 0, 0)
@@ -139,16 +141,17 @@ public class TestFilterAndProjectOperator
                 .addSequencePage(100, 0, 0)
                 .addSequencePage(100, 0, 0)
                 .build();
+        MetadataManager metadata = createTestMetadataManager();
 
         RowExpression filter = call(
-                Signature.internalOperator(EQUAL, BOOLEAN.getTypeSignature(), ImmutableList.of(BIGINT.getTypeSignature(), BIGINT.getTypeSignature())),
+                EQUAL.name(),
+                metadata.getFunctionManager().resolveOperator(EQUAL, fromTypes(BIGINT, BIGINT)),
                 BOOLEAN,
                 field(1, BIGINT),
                 constant(10L, BIGINT));
 
-        MetadataManager metadata = createTestMetadataManager();
         ExpressionCompiler compiler = new ExpressionCompiler(metadata, new PageFunctionCompiler(metadata, 0));
-        Supplier<PageProcessor> processor = compiler.compilePageProcessor(Optional.of(filter), ImmutableList.of(field(1, BIGINT)));
+        Supplier<PageProcessor> processor = compiler.compilePageProcessor(TEST_SESSION.getSqlFunctionProperties(), Optional.of(filter), ImmutableList.of(field(1, BIGINT)));
 
         OperatorFactory operatorFactory = new FilterAndProjectOperator.FilterAndProjectOperatorFactory(
                 0,
@@ -165,6 +168,6 @@ public class TestFilterAndProjectOperator
                 .row(10L)
                 .build();
 
-        assertOperatorEquals(operatorFactory, driverContext, input, expected);
+        assertOperatorEquals(operatorFactory, ImmutableList.of(BIGINT), driverContext, input, expected);
     }
 }

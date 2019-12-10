@@ -13,23 +13,25 @@
  */
 package com.facebook.presto.raptor;
 
+import com.facebook.airlift.bootstrap.LifeCycleManager;
+import com.facebook.airlift.log.Logger;
 import com.facebook.presto.raptor.metadata.ForMetadata;
 import com.facebook.presto.raptor.metadata.MetadataDao;
 import com.facebook.presto.spi.NodeManager;
 import com.facebook.presto.spi.SystemTable;
 import com.facebook.presto.spi.connector.Connector;
+import com.facebook.presto.spi.connector.ConnectorAccessControl;
 import com.facebook.presto.spi.connector.ConnectorMetadata;
 import com.facebook.presto.spi.connector.ConnectorNodePartitioningProvider;
 import com.facebook.presto.spi.connector.ConnectorPageSinkProvider;
 import com.facebook.presto.spi.connector.ConnectorPageSourceProvider;
 import com.facebook.presto.spi.connector.ConnectorSplitManager;
 import com.facebook.presto.spi.connector.ConnectorTransactionHandle;
+import com.facebook.presto.spi.procedure.Procedure;
 import com.facebook.presto.spi.session.PropertyMetadata;
 import com.facebook.presto.spi.transaction.IsolationLevel;
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.SetMultimap;
-import io.airlift.bootstrap.LifeCycleManager;
-import io.airlift.log.Logger;
 import org.skife.jdbi.v2.IDBI;
 
 import javax.annotation.PostConstruct;
@@ -43,12 +45,12 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ScheduledExecutorService;
 
+import static com.facebook.airlift.concurrent.Threads.daemonThreadsNamed;
 import static com.facebook.presto.raptor.util.DatabaseUtil.onDemandDao;
 import static com.facebook.presto.spi.transaction.IsolationLevel.READ_COMMITTED;
 import static com.facebook.presto.spi.transaction.IsolationLevel.checkConnectorSupports;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Verify.verify;
-import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.Executors.newSingleThreadScheduledExecutor;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -68,7 +70,9 @@ public class RaptorConnector
     private final List<PropertyMetadata<?>> tableProperties;
     private final Set<SystemTable> systemTables;
     private final MetadataDao dao;
+    private final ConnectorAccessControl accessControl;
     private final boolean coordinator;
+    private final Set<Procedure> procedures;
 
     private final ConcurrentMap<ConnectorTransactionHandle, RaptorMetadata> transactions = new ConcurrentHashMap<>();
 
@@ -89,7 +93,9 @@ public class RaptorConnector
             RaptorSessionProperties sessionProperties,
             RaptorTableProperties tableProperties,
             Set<SystemTable> systemTables,
-            @ForMetadata IDBI dbi)
+            ConnectorAccessControl accessControl,
+            @ForMetadata IDBI dbi,
+            Set<Procedure> procedures)
     {
         this.lifeCycleManager = requireNonNull(lifeCycleManager, "lifeCycleManager is null");
         this.metadataFactory = requireNonNull(metadataFactory, "metadataFactory is null");
@@ -100,8 +106,10 @@ public class RaptorConnector
         this.sessionProperties = requireNonNull(sessionProperties, "sessionProperties is null").getSessionProperties();
         this.tableProperties = requireNonNull(tableProperties, "tableProperties is null").getTableProperties();
         this.systemTables = requireNonNull(systemTables, "systemTables is null");
+        this.accessControl = requireNonNull(accessControl, "accessControl is null");
         this.dao = onDemandDao(dbi, MetadataDao.class);
         this.coordinator = nodeManager.getCurrentNode().isCoordinator();
+        this.procedures = requireNonNull(procedures, "procedures is null");
     }
 
     @PostConstruct
@@ -191,6 +199,18 @@ public class RaptorConnector
     public Set<SystemTable> getSystemTables()
     {
         return systemTables;
+    }
+
+    @Override
+    public ConnectorAccessControl getAccessControl()
+    {
+        return accessControl;
+    }
+
+    @Override
+    public Set<Procedure> getProcedures()
+    {
+        return procedures;
     }
 
     @Override

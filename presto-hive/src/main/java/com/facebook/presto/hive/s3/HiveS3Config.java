@@ -13,10 +13,10 @@
  */
 package com.facebook.presto.hive.s3;
 
+import com.facebook.airlift.configuration.Config;
+import com.facebook.airlift.configuration.ConfigDescription;
+import com.facebook.airlift.configuration.ConfigSecuritySensitive;
 import com.google.common.base.StandardSystemProperty;
-import io.airlift.configuration.Config;
-import io.airlift.configuration.ConfigDescription;
-import io.airlift.configuration.ConfigSecuritySensitive;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 import io.airlift.units.MinDataSize;
@@ -36,7 +36,7 @@ public class HiveS3Config
     private String s3AwsSecretKey;
     private String s3Endpoint;
     private PrestoS3SignerType s3SignerType;
-    private boolean s3PathStyleAccess = false;
+    private boolean s3PathStyleAccess;
     private boolean s3UseInstanceCredentials = true;
     private boolean s3SslEnabled = true;
     private boolean s3SseEnabled;
@@ -56,6 +56,8 @@ public class HiveS3Config
     private DataSize s3MultipartMinPartSize = new DataSize(5, MEGABYTE);
     private boolean pinS3ClientToCurrentRegion;
     private String s3UserAgentPrefix = "";
+    private PrestoS3AclType s3AclType = PrestoS3AclType.PRIVATE;
+    private boolean skipGlacierObjects;
 
     public String getS3AwsAccessKey()
     {
@@ -372,6 +374,32 @@ public class HiveS3Config
     public HiveS3Config setS3UserAgentPrefix(String s3UserAgentPrefix)
     {
         this.s3UserAgentPrefix = s3UserAgentPrefix;
+        return this;
+    }
+
+    @NotNull
+    public PrestoS3AclType getS3AclType()
+    {
+        return s3AclType;
+    }
+
+    @Config("hive.s3.upload-acl-type")
+    @ConfigDescription("Canned ACL type for S3 uploads")
+    public HiveS3Config setS3AclType(PrestoS3AclType s3AclType)
+    {
+        this.s3AclType = s3AclType;
+        return this;
+    }
+
+    public boolean isSkipGlacierObjects()
+    {
+        return skipGlacierObjects;
+    }
+
+    @Config("hive.s3.skip-glacier-objects")
+    public HiveS3Config setSkipGlacierObjects(boolean skipGlacierObjects)
+    {
+        this.skipGlacierObjects = skipGlacierObjects;
         return this;
     }
 }

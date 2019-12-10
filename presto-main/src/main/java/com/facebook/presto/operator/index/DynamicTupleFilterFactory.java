@@ -18,9 +18,10 @@ import com.facebook.presto.operator.project.PageProcessor;
 import com.facebook.presto.operator.project.PageProjection;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.block.Block;
+import com.facebook.presto.spi.function.SqlFunctionProperties;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.gen.PageFunctionCompiler;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.sql.relational.Expressions;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
@@ -29,6 +30,7 @@ import io.airlift.units.DataSize;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.function.Supplier;
 import java.util.stream.IntStream;
 
@@ -56,6 +58,7 @@ public class DynamicTupleFilterFactory
             int[] tupleFilterChannels,
             int[] outputFilterChannels,
             List<Type> outputTypes,
+            SqlFunctionProperties sqlFunctionProperties,
             PageFunctionCompiler pageFunctionCompiler)
     {
         requireNonNull(planNodeId, "planNodeId is null");
@@ -78,26 +81,26 @@ public class DynamicTupleFilterFactory
 
         this.outputTypes = ImmutableList.copyOf(outputTypes);
         this.outputProjections = IntStream.range(0, outputTypes.size())
-                .mapToObj(field -> pageFunctionCompiler.compileProjection(Expressions.field(field, outputTypes.get(field)), Optional.empty()))
+                .mapToObj(field -> pageFunctionCompiler.compileProjection(sqlFunctionProperties, Expressions.field(field, outputTypes.get(field)), Optional.empty()))
                 .collect(toImmutableList());
     }
 
     public OperatorFactory filterWithTuple(Page tuplePage)
     {
         Page filterTuple = getFilterTuple(tuplePage);
-        Supplier<PageProcessor> processor = createPageProcessor(filterTuple);
+        Supplier<PageProcessor> processor = createPageProcessor(filterTuple, OptionalInt.empty());
         return new FilterAndProjectOperatorFactory(filterOperatorId, planNodeId, processor, outputTypes, new DataSize(0, BYTE), 0);
     }
 
     @VisibleForTesting
-    public Supplier<PageProcessor> createPageProcessor(Page filterTuple)
+    public Supplier<PageProcessor> createPageProcessor(Page filterTuple, OptionalInt initialBatchSize)
     {
         TuplePageFilter filter = new TuplePageFilter(filterTuple, filterTypes, outputFilterChannels);
         return () -> new PageProcessor(
                 Optional.of(filter),
                 outputProjections.stream()
                         .map(Supplier::get)
-                        .collect(toImmutableList()));
+                        .collect(toImmutableList()), initialBatchSize);
     }
 
     private Page getFilterTuple(Page tuplePage)

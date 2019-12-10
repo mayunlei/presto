@@ -1,4 +1,4 @@
--- database: presto_tpcds; groups: tpcds; requires: com.teradata.tempto.fulfillment.table.hive.tpcds.ImmutableTpcdsTablesRequirements
+-- database: presto_tpcds; groups: tpcds; requires: io.prestodb.tempto.fulfillment.table.hive.tpcds.ImmutableTpcdsTablesRequirements
 SELECT
   "w_warehouse_name"
 , "w_warehouse_sq_ft"
@@ -91,7 +91,7 @@ FROM
          AND ("ws_ship_mode_sk" = "sm_ship_mode_sk")
          AND ("d_year" = 2001)
          AND ("t_time" BETWEEN 30838 AND (30838 + 28800))
-         AND ("sm_carrier" IN ('DHL                 '      , 'BARIAN              '))
+         AND ("sm_carrier" IN ('DHL'      , 'BARIAN'))
       GROUP BY "w_warehouse_name", "w_warehouse_sq_ft", "w_city", "w_county", "w_state", "w_country", "d_year"
    UNION ALL
       SELECT
@@ -139,7 +139,7 @@ FROM
          AND ("cs_ship_mode_sk" = "sm_ship_mode_sk")
          AND ("d_year" = 2001)
          AND ("t_time" BETWEEN 30838 AND (30838 + 28800))
-         AND ("sm_carrier" IN ('DHL                 '      , 'BARIAN              '))
+         AND ("sm_carrier" IN ('DHL'      , 'BARIAN'))
       GROUP BY "w_warehouse_name", "w_warehouse_sq_ft", "w_city", "w_county", "w_state", "w_country", "d_year"
    )  x
 GROUP BY "w_warehouse_name", "w_warehouse_sq_ft", "w_city", "w_county", "w_state", "w_country", "ship_carriers", "year"

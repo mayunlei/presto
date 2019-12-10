@@ -13,8 +13,8 @@
  */
 package com.facebook.presto.sql.planner.optimizations;
 
+import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.sql.planner.iterative.Lookup;
-import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.google.common.collect.ImmutableList;
 
 import java.util.List;
@@ -38,7 +38,7 @@ public class PlanNodeSearcher
 
     /**
      * Use it in optimizer {@link com.facebook.presto.sql.planner.iterative.Rule} only if you truly do not have a better option
-     *
+     * <p>
      * TODO: replace it with a support for plan (physical) properties in rules pattern matching
      */
     public static PlanNodeSearcher searchFrom(PlanNode node, Lookup lookup)
@@ -95,10 +95,14 @@ public class PlanNodeSearcher
     public <T extends PlanNode> Optional<T> findSingle()
     {
         List<T> all = findAll();
-        if (all.size() == 1) {
-            return Optional.of(all.get(0));
+        switch (all.size()) {
+            case 0:
+                return Optional.empty();
+            case 1:
+                return Optional.of(all.get(0));
+            default:
+                throw new IllegalStateException("Multiple nodes found");
         }
-        return Optional.empty();
     }
 
     public <T extends PlanNode> List<T> findAll()
@@ -153,7 +157,7 @@ public class PlanNodeSearcher
         }
         if (recurseOnlyWhen.test(node)) {
             List<PlanNode> sources = node.getSources().stream()
-                    .map(source -> removeAllRecursive(source))
+                    .map(this::removeAllRecursive)
                     .collect(toImmutableList());
             return replaceChildren(node, sources);
         }

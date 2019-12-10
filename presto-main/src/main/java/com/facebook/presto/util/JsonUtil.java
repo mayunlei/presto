@@ -23,7 +23,7 @@ import com.facebook.presto.spi.type.DecimalType;
 import com.facebook.presto.spi.type.Decimals;
 import com.facebook.presto.spi.type.MapType;
 import com.facebook.presto.spi.type.RowType;
-import com.facebook.presto.spi.type.RowType.RowField;
+import com.facebook.presto.spi.type.RowType.Field;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.type.BigintOperators;
@@ -50,6 +50,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.TreeMap;
@@ -89,6 +90,7 @@ import static java.lang.Float.intBitsToFloat;
 import static java.lang.Math.toIntExact;
 import static java.lang.String.format;
 import static java.math.RoundingMode.HALF_UP;
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
 
 public final class JsonUtil
@@ -109,7 +111,7 @@ public final class JsonUtil
     {
         // Jackson tries to detect the character encoding automatically when using InputStream
         // so we pass an InputStreamReader instead.
-        return factory.createParser(new InputStreamReader(json.getInput()));
+        return factory.createParser(new InputStreamReader(json.getInput(), UTF_8));
     }
 
     public static JsonGenerator createJsonGenerator(JsonFactory factory, SliceOutput output)
@@ -902,7 +904,7 @@ public final class JsonUtil
                             mapType.getKeyType());
                 case StandardTypes.ROW:
                     RowType rowType = (RowType) type;
-                    List<RowField> rowFields = rowType.getFields();
+                    List<Field> rowFields = rowType.getFields();
                     BlockBuilderAppender[] fieldAppenders = new BlockBuilderAppender[rowFields.size()];
                     for (int i = 0; i < fieldAppenders.length; i++) {
                         fieldAppenders[i] = createBlockBuilderAppender(rowFields.get(i).getType());
@@ -1036,7 +1038,7 @@ public final class JsonUtil
     private static class ShortDecimalBlockBuilderAppender
             implements BlockBuilderAppender
     {
-        DecimalType type;
+        final DecimalType type;
 
         ShortDecimalBlockBuilderAppender(DecimalType type)
         {
@@ -1061,7 +1063,7 @@ public final class JsonUtil
     private static class LongDecimalBlockBuilderAppender
             implements BlockBuilderAppender
     {
-        DecimalType type;
+        final DecimalType type;
 
         LongDecimalBlockBuilderAppender(DecimalType type)
         {
@@ -1086,7 +1088,7 @@ public final class JsonUtil
     private static class VarcharBlockBuilderAppender
             implements BlockBuilderAppender
     {
-        Type type;
+        final Type type;
 
         VarcharBlockBuilderAppender(Type type)
         {
@@ -1110,7 +1112,7 @@ public final class JsonUtil
     private static class ArrayBlockBuilderAppender
             implements BlockBuilderAppender
     {
-        BlockBuilderAppender elementAppender;
+        final BlockBuilderAppender elementAppender;
 
         ArrayBlockBuilderAppender(BlockBuilderAppender elementAppender)
         {
@@ -1140,9 +1142,9 @@ public final class JsonUtil
     private static class MapBlockBuilderAppender
             implements BlockBuilderAppender
     {
-        BlockBuilderAppender keyAppender;
-        BlockBuilderAppender valueAppender;
-        Type keyType;
+        final BlockBuilderAppender keyAppender;
+        final BlockBuilderAppender valueAppender;
+        final Type keyType;
 
         MapBlockBuilderAppender(BlockBuilderAppender keyAppender, BlockBuilderAppender valueAppender, Type keyType)
         {
@@ -1182,8 +1184,8 @@ public final class JsonUtil
     private static class RowBlockBuilderAppender
             implements BlockBuilderAppender
     {
-        BlockBuilderAppender[] fieldAppenders;
-        Optional<Map<String, Integer>> fieldNameToIndex;
+        final BlockBuilderAppender[] fieldAppenders;
+        final Optional<Map<String, Integer>> fieldNameToIndex;
 
         RowBlockBuilderAppender(BlockBuilderAppender[] fieldAppenders, Optional<Map<String, Integer>> fieldNameToIndex)
         {
@@ -1213,7 +1215,7 @@ public final class JsonUtil
         }
     }
 
-    public static Optional<Map<String, Integer>> getFieldNameToIndex(List<RowField> rowFields)
+    public static Optional<Map<String, Integer>> getFieldNameToIndex(List<Field> rowFields)
     {
         if (!rowFields.get(0).getName().isPresent()) {
             return Optional.empty();
@@ -1257,7 +1259,7 @@ public final class JsonUtil
                 if (parser.currentToken() != FIELD_NAME) {
                     throw new JsonCastException(format("Expected a json field name, but got %s", parser.getText()));
                 }
-                String fieldName = parser.getText().toLowerCase();
+                String fieldName = parser.getText().toLowerCase(Locale.ENGLISH);
                 Integer fieldIndex = fieldNameToIndex.get().get(fieldName);
                 parser.nextToken();
                 if (fieldIndex != null) {

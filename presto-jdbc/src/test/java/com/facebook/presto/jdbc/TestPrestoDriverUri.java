@@ -19,6 +19,7 @@ import java.net.URI;
 import java.sql.SQLException;
 import java.util.Properties;
 
+import static com.facebook.presto.jdbc.ConnectionProperties.EXTRA_CREDENTIALS;
 import static com.facebook.presto.jdbc.ConnectionProperties.HTTP_PROXY;
 import static com.facebook.presto.jdbc.ConnectionProperties.SOCKS_PROXY;
 import static com.facebook.presto.jdbc.ConnectionProperties.SSL_TRUST_STORE_PASSWORD;
@@ -91,6 +92,17 @@ public class TestPrestoDriverUri
 
         // kerberos config without service name
         assertInvalid("jdbc:presto://localhost:8080?KerberosCredentialCachePath=/test", "Connection property 'KerberosCredentialCachePath' is not allowed");
+
+        // invalid extra credentials
+        assertInvalid("presto://localhost:8080?extraCredentials=:invalid", "Connection property 'extraCredentials' value is invalid:");
+        assertInvalid("presto://localhost:8080?extraCredentials=invalid:", "Connection property 'extraCredentials' value is invalid:");
+        assertInvalid("presto://localhost:8080?extraCredentials=:invalid", "Connection property 'extraCredentials' value is invalid:");
+
+        // duplicate credential keys
+        assertInvalid("presto://localhost:8080?extraCredentials=test.token.foo:bar;test.token.foo:xyz", "Connection property 'extraCredentials' value is invalid");
+
+        // empty extra credentials
+        assertInvalid("presto://localhost:8080?extraCredentials=", "Connection property 'extraCredentials' value is empty");
     }
 
     @Test(expectedExceptions = SQLException.class, expectedExceptionsMessageRegExp = "Connection property 'user' is required")
@@ -154,14 +166,6 @@ public class TestPrestoDriverUri
     }
 
     @Test
-    public void testUriWithSslPortDoesNotUseSsl()
-            throws SQLException
-    {
-        PrestoDriverUri parameters = createDriverUri("presto://somelocalhost:443/blackhole");
-        assertUriPortScheme(parameters, 443, "http");
-    }
-
-    @Test
     public void testUriWithSslDisabled()
             throws SQLException
     {
@@ -179,6 +183,22 @@ public class TestPrestoDriverUri
         Properties properties = parameters.getProperties();
         assertNull(properties.getProperty(SSL_TRUST_STORE_PATH.getKey()));
         assertNull(properties.getProperty(SSL_TRUST_STORE_PASSWORD.getKey()));
+    }
+
+    @Test
+    public void testUriWithSslDisabledUsing443()
+            throws SQLException
+    {
+        PrestoDriverUri parameters = createDriverUri("presto://localhost:443/blackhole?SSL=false");
+        assertUriPortScheme(parameters, 443, "http");
+    }
+
+    @Test
+    public void testUriWithSslEnabledUsing443()
+            throws SQLException
+    {
+        PrestoDriverUri parameters = createDriverUri("presto://localhost:443/blackhole");
+        assertUriPortScheme(parameters, 443, "https");
     }
 
     @Test
@@ -203,6 +223,16 @@ public class TestPrestoDriverUri
         Properties properties = parameters.getProperties();
         assertEquals(properties.getProperty(SSL_TRUST_STORE_PATH.getKey()), "truststore.jks");
         assertEquals(properties.getProperty(SSL_TRUST_STORE_PASSWORD.getKey()), "password");
+    }
+
+    @Test
+    public void testUriWithExtraCredentials()
+            throws SQLException
+    {
+        String extraCredentials = "test.token.foo:bar;test.token.abc:xyz";
+        PrestoDriverUri parameters = createDriverUri("presto://localhost:8080?extraCredentials=" + extraCredentials);
+        Properties properties = parameters.getProperties();
+        assertEquals(properties.getProperty(EXTRA_CREDENTIALS.getKey()), extraCredentials);
     }
 
     private static void assertUriPortScheme(PrestoDriverUri parameters, int port, String scheme)

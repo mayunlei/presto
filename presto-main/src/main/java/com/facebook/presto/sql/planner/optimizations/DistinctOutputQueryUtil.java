@@ -13,19 +13,18 @@
  */
 package com.facebook.presto.sql.planner.optimizations;
 
-import com.facebook.presto.sql.planner.plan.AggregationNode;
+import com.facebook.presto.spi.plan.AggregationNode;
+import com.facebook.presto.spi.plan.ExceptNode;
+import com.facebook.presto.spi.plan.FilterNode;
+import com.facebook.presto.spi.plan.IntersectNode;
+import com.facebook.presto.spi.plan.LimitNode;
+import com.facebook.presto.spi.plan.PlanNode;
+import com.facebook.presto.spi.plan.TopNNode;
+import com.facebook.presto.spi.plan.ValuesNode;
 import com.facebook.presto.sql.planner.plan.AssignUniqueId;
 import com.facebook.presto.sql.planner.plan.DistinctLimitNode;
 import com.facebook.presto.sql.planner.plan.EnforceSingleRowNode;
-import com.facebook.presto.sql.planner.plan.ExceptNode;
-import com.facebook.presto.sql.planner.plan.FilterNode;
-import com.facebook.presto.sql.planner.plan.IntersectNode;
-import com.facebook.presto.sql.planner.plan.LimitNode;
-import com.facebook.presto.sql.planner.plan.PlanNode;
-import com.facebook.presto.sql.planner.plan.PlanVisitor;
-import com.facebook.presto.sql.planner.plan.ProjectNode;
-import com.facebook.presto.sql.planner.plan.TopNNode;
-import com.facebook.presto.sql.planner.plan.ValuesNode;
+import com.facebook.presto.sql.planner.plan.InternalPlanVisitor;
 
 import java.util.function.Function;
 
@@ -46,7 +45,7 @@ public final class DistinctOutputQueryUtil
     }
 
     private static final class IsDistinctPlanVisitor
-            extends PlanVisitor<Boolean, Void>
+            extends InternalPlanVisitor<Boolean, Void>
     {
         /*
         With the iterative optimizer, plan nodes are replaced with
@@ -63,7 +62,7 @@ public final class DistinctOutputQueryUtil
         }
 
         @Override
-        protected Boolean visitPlan(PlanNode node, Void context)
+        public Boolean visitPlan(PlanNode node, Void context)
         {
             return false;
         }
@@ -108,12 +107,6 @@ public final class DistinctOutputQueryUtil
         public Boolean visitIntersect(IntersectNode node, Void context)
         {
             return true;
-        }
-
-        @Override
-        public Boolean visitProject(ProjectNode node, Void context)
-        {
-            return node.isIdentity() && lookupFunction.apply(node.getSource()).accept(this, null);
         }
 
         @Override

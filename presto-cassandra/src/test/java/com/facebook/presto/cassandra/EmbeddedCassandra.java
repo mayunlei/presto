@@ -16,10 +16,10 @@ package com.facebook.presto.cassandra;
 import com.datastax.driver.core.Cluster;
 import com.datastax.driver.core.ResultSet;
 import com.datastax.driver.core.Row;
+import com.facebook.airlift.json.JsonCodec;
+import com.facebook.airlift.log.Logger;
 import com.google.common.collect.ImmutableList;
 import com.google.common.io.Resources;
-import io.airlift.json.JsonCodec;
-import io.airlift.log.Logger;
 import io.airlift.units.Duration;
 import org.apache.cassandra.service.CassandraDaemon;
 
@@ -159,7 +159,7 @@ public final class EmbeddedCassandra
             throws Exception
     {
         long deadline = System.nanoTime() + REFRESH_SIZE_ESTIMATES_TIMEOUT.roundTo(NANOSECONDS);
-        while (System.nanoTime() < deadline) {
+        while (System.nanoTime() - deadline < 0) {
             flushTable(keyspace, table);
             refreshSizeEstimates();
             List<SizeEstimate> sizeEstimates = getSession().getSizeEstimates(keyspace, table);

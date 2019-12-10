@@ -13,23 +13,42 @@
  */
 package com.facebook.presto.orc;
 
+import com.facebook.presto.orc.StripeReader.StripeId;
+import com.facebook.presto.orc.StripeReader.StripeStreamId;
+import com.facebook.presto.orc.cache.CachingOrcFileTailSource;
+import com.facebook.presto.orc.cache.OrcFileTailSource;
+import com.facebook.presto.orc.cache.StorageOrcFileTailSource;
+import com.facebook.presto.orc.metadata.CompressionKind;
+import com.facebook.presto.orc.metadata.OrcFileTail;
 import com.facebook.presto.spi.type.CharType;
 import com.facebook.presto.spi.type.DecimalType;
 import com.facebook.presto.spi.type.SqlDate;
 import com.facebook.presto.spi.type.SqlDecimal;
-import com.facebook.presto.spi.type.SqlTimestamp;
 import com.facebook.presto.spi.type.SqlVarbinary;
 import com.google.common.base.Strings;
+import com.google.common.cache.Cache;
+import com.google.common.cache.CacheBuilder;
 import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.ContiguousSet;
 import com.google.common.collect.DiscreteDomain;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableList.Builder;
 import com.google.common.collect.Range;
+import io.airlift.slice.Slice;
+import io.airlift.units.DataSize;
+import io.airlift.units.Duration;
+import org.apache.hadoop.hive.ql.exec.FileSinkOperator.RecordWriter;
+import org.apache.hadoop.hive.ql.io.orc.OrcSerde;
+import org.apache.hadoop.hive.serde2.SerDeException;
+import org.apache.hadoop.hive.serde2.Serializer;
+import org.apache.hadoop.hive.serde2.objectinspector.SettableStructObjectInspector;
+import org.apache.hadoop.hive.serde2.objectinspector.StructField;
+import org.apache.hadoop.io.Writable;
 import org.joda.time.DateTimeZone;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
+import java.io.IOException;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -37,7 +56,13 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Random;
 
+import static com.facebook.presto.orc.OrcEncoding.ORC;
+import static com.facebook.presto.orc.OrcReader.INITIAL_BATCH_SIZE;
+import static com.facebook.presto.orc.OrcTester.Format.ORC_12;
 import static com.facebook.presto.orc.OrcTester.HIVE_STORAGE_TIME_ZONE;
+import static com.facebook.presto.orc.OrcTester.createCustomOrcRecordReader;
+import static com.facebook.presto.orc.OrcTester.createOrcRecordWriter;
+import static com.facebook.presto.orc.OrcTester.createSettableStructObjectInspector;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.CharType.createCharType;
@@ -46,17 +71,21 @@ import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
 import static com.facebook.presto.spi.type.IntegerType.INTEGER;
 import static com.facebook.presto.spi.type.RealType.REAL;
 import static com.facebook.presto.spi.type.SmallintType.SMALLINT;
-import static com.facebook.presto.spi.type.TimeZoneKey.UTC_KEY;
 import static com.facebook.presto.spi.type.TimestampType.TIMESTAMP;
 import static com.facebook.presto.spi.type.TinyintType.TINYINT;
 import static com.facebook.presto.spi.type.VarbinaryType.VARBINARY;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
+import static com.facebook.presto.testing.DateTimeTestingUtils.sqlTimestampOf;
+import static com.facebook.presto.testing.TestingConnectorSession.SESSION;
 import static com.google.common.collect.Iterables.concat;
 import static com.google.common.collect.Iterables.cycle;
 import static com.google.common.collect.Iterables.limit;
 import static com.google.common.collect.Lists.newArrayList;
+import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Collections.nCopies;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.stream.Collectors.toList;
 import static org.testng.Assert.assertEquals;
 
@@ -97,6 +126,16 @@ public abstract class AbstractTestOrcReader
             throws Exception
     {
         testRoundTripNumeric(intsBetween(0, 31_234));
+    }
+
+    @Test
+    public void testNegativeLongSequence()
+            throws Exception
+    {
+        // A flaw in ORC encoding makes it impossible to represent timestamp
+        // between 1969-12-31 23:59:59.000, exclusive, and 1970-01-01 00:00:00.000, exclusive.
+        // Therefore, such data won't round trip and are skipped from test.
+        testRoundTripNumeric(intsBetween(-31_234, -999));
     }
 
     @Test
@@ -146,6 +185,78 @@ public abstract class AbstractTestOrcReader
         testRoundTripNumeric(concat(ImmutableList.of(1), nCopies(9999, 123), ImmutableList.of(2), nCopies(9999, 123)));
     }
 
+    @Test
+    public void testCaching()
+            throws Exception
+    {
+        Cache<OrcDataSourceId, OrcFileTail> orcFileTailCache = CacheBuilder.newBuilder()
+                .maximumWeight(new DataSize(1, MEGABYTE).toBytes())
+                .weigher((id, tail) -> ((OrcFileTail) tail).getFooterSize() + ((OrcFileTail) tail).getMetadataSize())
+                .expireAfterAccess(new Duration(10, MINUTES).toMillis(), MILLISECONDS)
+                .recordStats()
+                .build();
+        OrcFileTailSource orcFileTailSource = new CachingOrcFileTailSource(new StorageOrcFileTailSource(), orcFileTailCache);
+
+        Cache<StripeId, Slice> stripeFootercache = CacheBuilder.newBuilder()
+                .maximumWeight(new DataSize(1, MEGABYTE).toBytes())
+                .weigher((id, footer) -> ((Slice) footer).length())
+                .expireAfterAccess(new Duration(10, MINUTES).toMillis(), MILLISECONDS)
+                .recordStats()
+                .build();
+        Cache<StripeStreamId, Slice> stripeStreamCache = CacheBuilder.newBuilder()
+                .maximumWeight(new DataSize(1, MEGABYTE).toBytes())
+                .weigher((id, stream) -> ((Slice) stream).length())
+                .expireAfterAccess(new Duration(10, MINUTES).toMillis(), MILLISECONDS)
+                .recordStats()
+                .build();
+        StripeMetadataSource stripeMetadataSource = new CachingStripeMetadataSource(new StorageStripeMetadataSource(), stripeFootercache, stripeStreamCache);
+
+        try (TempFile tempFile = createTempFile()) {
+            OrcBatchRecordReader storageReader = createCustomOrcRecordReader(tempFile, ORC, OrcPredicate.TRUE, ImmutableList.of(BIGINT), INITIAL_BATCH_SIZE, orcFileTailSource, stripeMetadataSource);
+            assertEquals(orcFileTailCache.stats().missCount(), 1);
+            assertEquals(orcFileTailCache.stats().hitCount(), 0);
+
+            OrcBatchRecordReader cacheReader = createCustomOrcRecordReader(tempFile, ORC, OrcPredicate.TRUE, ImmutableList.of(BIGINT), INITIAL_BATCH_SIZE, orcFileTailSource, stripeMetadataSource);
+            assertEquals(orcFileTailCache.stats().missCount(), 1);
+            assertEquals(orcFileTailCache.stats().hitCount(), 1);
+
+            assertEquals(storageReader.getRetainedSizeInBytes(), cacheReader.getRetainedSizeInBytes());
+            assertEquals(storageReader.getFileRowCount(), cacheReader.getFileRowCount());
+            assertEquals(storageReader.getSplitLength(), cacheReader.getSplitLength());
+
+            storageReader.nextBatch();
+            assertEquals(stripeFootercache.stats().missCount(), 1);
+            assertEquals(stripeFootercache.stats().hitCount(), 0);
+            assertEquals(stripeStreamCache.stats().missCount(), 2);
+            assertEquals(stripeStreamCache.stats().hitCount(), 0);
+            cacheReader.nextBatch();
+            assertEquals(stripeFootercache.stats().missCount(), 1);
+            assertEquals(stripeFootercache.stats().hitCount(), 1);
+            assertEquals(stripeStreamCache.stats().missCount(), 2);
+            assertEquals(stripeStreamCache.stats().hitCount(), 2);
+            assertEquals(storageReader.readBlock(0).getInt(0), cacheReader.readBlock(0).getInt(0));
+        }
+    }
+
+    private static TempFile createTempFile()
+            throws IOException, SerDeException
+    {
+        TempFile file = new TempFile();
+        RecordWriter writer = createOrcRecordWriter(file.getFile(), ORC_12, CompressionKind.NONE, BIGINT);
+
+        @SuppressWarnings("deprecation") Serializer serde = new OrcSerde();
+        SettableStructObjectInspector objectInspector = createSettableStructObjectInspector("test", BIGINT);
+        Object row = objectInspector.create();
+        StructField field = objectInspector.getAllStructFieldRefs().get(0);
+
+        objectInspector.setStructFieldData(row, field, 1L);
+        Writable record = serde.serialize(row, objectInspector);
+        writer.write(record);
+
+        writer.close(false);
+        return file;
+    }
+
     private void testRoundTripNumeric(Iterable<? extends Number> values)
             throws Exception
     {
@@ -182,7 +293,7 @@ public abstract class AbstractTestOrcReader
         tester.testRoundTrip(
                 TIMESTAMP,
                 writeValues.stream()
-                        .map(timestamp -> new SqlTimestamp(timestamp, UTC_KEY))
+                        .map(timestamp -> sqlTimestampOf(timestamp, SESSION))
                         .collect(toList()));
     }
 
@@ -471,6 +582,6 @@ public abstract class AbstractTestOrcReader
 
     private static ContiguousSet<Integer> intsBetween(int lowerInclusive, int upperExclusive)
     {
-        return ContiguousSet.create(Range.openClosed(lowerInclusive, upperExclusive), DiscreteDomain.integers());
+        return ContiguousSet.create(Range.closedOpen(lowerInclusive, upperExclusive), DiscreteDomain.integers());
     }
 }

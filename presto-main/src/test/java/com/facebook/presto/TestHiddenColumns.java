@@ -31,7 +31,6 @@ public class TestHiddenColumns
 
     @BeforeClass
     public void setUp()
-            throws Exception
     {
         runner = new LocalQueryRunner(TEST_SESSION);
         runner.createCatalog(TEST_SESSION.getCatalog().get(), new TpchConnectorFactory(1), ImmutableMap.of());
@@ -48,7 +47,6 @@ public class TestHiddenColumns
 
     @Test
     public void testDescribeTable()
-            throws Exception
     {
         MaterializedResult expected = MaterializedResult.resultBuilder(TEST_SESSION, VARCHAR, VARCHAR, VARCHAR, VARCHAR)
                 .row("regionkey", "bigint", "", "")
@@ -60,12 +58,21 @@ public class TestHiddenColumns
 
     @Test
     public void testSimpleSelect()
-            throws Exception
     {
         assertEquals(runner.execute("SELECT * from REGION"), runner.execute("SELECT regionkey, name, comment from REGION"));
         assertEquals(runner.execute("SELECT *, row_number from REGION"), runner.execute("SELECT regionkey, name, comment, row_number from REGION"));
         assertEquals(runner.execute("SELECT row_number, * from REGION"), runner.execute("SELECT row_number, regionkey, name, comment from REGION"));
         assertEquals(runner.execute("SELECT *, row_number, * from REGION"), runner.execute("SELECT regionkey, name, comment, row_number, regionkey, name, comment from REGION"));
         assertEquals(runner.execute("SELECT row_number, x.row_number from REGION x"), runner.execute("SELECT row_number, row_number from REGION"));
+    }
+
+    @Test
+    public void testAliasedTableColumns()
+    {
+        // https://github.com/prestodb/presto/issues/11385
+        // TPCH tables have a hidden "row_number" column, which triggers this bug.
+        assertEquals(
+                runner.execute("SELECT * FROM orders AS t (a, b, c, d, e, f, g, h, i)"),
+                runner.execute("SELECT * FROM orders"));
     }
 }

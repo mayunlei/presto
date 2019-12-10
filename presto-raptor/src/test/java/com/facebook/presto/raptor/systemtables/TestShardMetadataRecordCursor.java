@@ -20,6 +20,7 @@ import com.facebook.presto.raptor.metadata.ShardInfo;
 import com.facebook.presto.raptor.metadata.ShardManager;
 import com.facebook.presto.raptor.metadata.TableColumn;
 import com.facebook.presto.spi.ColumnMetadata;
+import com.facebook.presto.spi.ConnectorTableMetadata;
 import com.facebook.presto.spi.RecordCursor;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.connector.ConnectorMetadata;
@@ -48,6 +49,7 @@ import java.util.Set;
 import java.util.UUID;
 
 import static com.facebook.presto.metadata.MetadataUtil.TableMetadataBuilder.tableMetadataBuilder;
+import static com.facebook.presto.raptor.RaptorTableProperties.TABLE_SUPPORTS_DELTA_DELETE;
 import static com.facebook.presto.raptor.metadata.SchemaDaoUtil.createTablesWithRetry;
 import static com.facebook.presto.raptor.metadata.TestDatabaseShardManager.createShardManager;
 import static com.facebook.presto.raptor.systemtables.ShardMetadataRecordCursor.SHARD_METADATA;
@@ -78,15 +80,16 @@ public class TestShardMetadataRecordCursor
         this.dbi.registerMapper(new TableColumn.Mapper(new TypeRegistry()));
         this.dummyHandle = dbi.open();
         createTablesWithRetry(dbi);
-        this.metadata = new RaptorMetadata("raptor", dbi, createShardManager(dbi));
+        this.metadata = new RaptorMetadata("raptor", dbi, createShardManager(dbi), new TypeRegistry());
 
         // Create table
-        metadata.createTable(SESSION, tableMetadataBuilder(DEFAULT_TEST_ORDERS)
+        ConnectorTableMetadata table = tableMetadataBuilder(DEFAULT_TEST_ORDERS)
                 .column("orderkey", BIGINT)
                 .column("orderdate", DATE)
                 .property("temporal_column", "orderdate")
-                .build(),
-                false);
+                .property(TABLE_SUPPORTS_DELTA_DELETE, false)
+                .build();
+        createTable(table);
     }
 
     @AfterMethod(alwaysRun = true)
@@ -97,7 +100,6 @@ public class TestShardMetadataRecordCursor
 
     @Test
     public void testSimple()
-            throws Exception
     {
         ShardManager shardManager = createShardManager(dbi);
 
@@ -153,19 +155,18 @@ public class TestShardMetadataRecordCursor
 
     @Test
     public void testNoSchemaFilter()
-            throws Exception
     {
         // Create "orders" table in a different schema
-        metadata.createTable(SESSION, tableMetadataBuilder(new SchemaTableName("other", "orders"))
+        createTable(tableMetadataBuilder(new SchemaTableName("other", "orders"))
                 .column("orderkey", BIGINT)
-                .build(),
-                false);
+                .property(TABLE_SUPPORTS_DELTA_DELETE, false)
+                .build());
 
         // Create another table that should not be selected
-        metadata.createTable(SESSION, tableMetadataBuilder(new SchemaTableName("schema1", "foo"))
+        createTable(tableMetadataBuilder(new SchemaTableName("schema1", "foo"))
                 .column("orderkey", BIGINT)
-                .build(),
-                false);
+                .property(TABLE_SUPPORTS_DELTA_DELETE, false)
+                .build());
 
         TupleDomain<Integer> tupleDomain = TupleDomain.withColumnDomains(
                 ImmutableMap.<Integer, Domain>builder()
@@ -182,19 +183,18 @@ public class TestShardMetadataRecordCursor
 
     @Test
     public void testNoTableFilter()
-            throws Exception
     {
         // Create "orders" table in a different schema
-        metadata.createTable(SESSION, tableMetadataBuilder(new SchemaTableName("test", "orders2"))
+        createTable(tableMetadataBuilder(new SchemaTableName("test", "orders2"))
                 .column("orderkey", BIGINT)
-                .build(),
-                false);
+                .property(TABLE_SUPPORTS_DELTA_DELETE, false)
+                .build());
 
         // Create another table that should not be selected
-        metadata.createTable(SESSION, tableMetadataBuilder(new SchemaTableName("schema1", "foo"))
+        createTable(tableMetadataBuilder(new SchemaTableName("schema1", "foo"))
                 .column("orderkey", BIGINT)
-                .build(),
-                false);
+                .property(TABLE_SUPPORTS_DELTA_DELETE, false)
+                .build());
 
         TupleDomain<Integer> tupleDomain = TupleDomain.withColumnDomains(
                 ImmutableMap.<Integer, Domain>builder()
@@ -207,6 +207,11 @@ public class TestShardMetadataRecordCursor
                 metadataDao.getTableInformation("test", "orders").getTableId(),
                 metadataDao.getTableInformation("test", "orders2").getTableId());
         assertEquals(actual, expected);
+    }
+
+    private void createTable(ConnectorTableMetadata table)
+    {
+        metadata.createTable(SESSION, table, false);
     }
 
     private static List<MaterializedRow> getMaterializedResults(RecordCursor cursor, List<ColumnMetadata> columns)

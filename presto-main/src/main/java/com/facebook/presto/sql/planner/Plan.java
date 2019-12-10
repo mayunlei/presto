@@ -13,31 +13,22 @@
  */
 package com.facebook.presto.sql.planner;
 
-import com.facebook.presto.cost.PlanNodeCost;
-import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.sql.planner.plan.PlanNode;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
-import com.google.common.collect.ImmutableMap;
-
-import java.util.Map;
+import com.facebook.presto.cost.StatsAndCosts;
+import com.facebook.presto.spi.plan.PlanNode;
 
 import static java.util.Objects.requireNonNull;
 
 public class Plan
 {
     private final PlanNode root;
-    private final Map<Symbol, Type> types;
-    private final Map<PlanNodeId, PlanNodeCost> planNodeCosts;
+    private final TypeProvider types;
+    private final StatsAndCosts statsAndCosts;
 
-    public Plan(PlanNode root, Map<Symbol, Type> types, Map<PlanNodeId, PlanNodeCost> planNodeCosts)
+    public Plan(PlanNode root, TypeProvider types, StatsAndCosts statsAndCosts)
     {
-        requireNonNull(root, "root is null");
-        requireNonNull(types, "types is null");
-        requireNonNull(planNodeCosts, "planNodeCosts is null");
-
-        this.root = root;
-        this.types = ImmutableMap.copyOf(types);
-        this.planNodeCosts = planNodeCosts;
+        this.root = requireNonNull(root, "root is null");
+        this.types = requireNonNull(types, "types is null");
+        this.statsAndCosts = requireNonNull(statsAndCosts, "statsAndCosts is null");
     }
 
     public PlanNode getRoot()
@@ -45,13 +36,13 @@ public class Plan
         return root;
     }
 
-    public Map<Symbol, Type> getTypes()
+    public TypeProvider getTypes()
     {
         return types;
     }
 
-    public Map<PlanNodeId, PlanNodeCost> getPlanNodeCosts()
+    public StatsAndCosts getStatsAndCosts()
     {
-        return planNodeCosts;
+        return statsAndCosts;
     }
 }

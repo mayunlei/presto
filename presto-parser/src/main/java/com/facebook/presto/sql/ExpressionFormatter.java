@@ -29,6 +29,7 @@ import com.facebook.presto.sql.tree.CoalesceExpression;
 import com.facebook.presto.sql.tree.ComparisonExpression;
 import com.facebook.presto.sql.tree.Cube;
 import com.facebook.presto.sql.tree.CurrentTime;
+import com.facebook.presto.sql.tree.CurrentUser;
 import com.facebook.presto.sql.tree.DecimalLiteral;
 import com.facebook.presto.sql.tree.DereferenceExpression;
 import com.facebook.presto.sql.tree.DoubleLiteral;
@@ -78,30 +79,48 @@ import com.facebook.presto.sql.tree.TryExpression;
 import com.facebook.presto.sql.tree.WhenClause;
 import com.facebook.presto.sql.tree.Window;
 import com.facebook.presto.sql.tree.WindowFrame;
+import com.google.common.base.CharMatcher;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableSet;
 
+import java.text.DecimalFormat;
+import java.text.DecimalFormatSymbols;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.PrimitiveIterator;
-import java.util.Set;
 import java.util.function.Function;
 
 import static com.facebook.presto.sql.SqlFormatter.formatSql;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static java.lang.String.format;
+import static java.util.stream.Collectors.joining;
 import static java.util.stream.Collectors.toList;
 
 public final class ExpressionFormatter
 {
+    private static final ThreadLocal<DecimalFormat> doubleFormatter = ThreadLocal.withInitial(
+            () -> new DecimalFormat("0.###################E0###", new DecimalFormatSymbols(Locale.US)));
+
     private ExpressionFormatter() {}
 
     public static String formatExpression(Expression expression, Optional<List<Expression>> parameters)
     {
         return new Formatter(parameters).process(expression, null);
+    }
+
+    public static String formatQualifiedName(QualifiedName name)
+    {
+        return name.getParts().stream()
+                .map(ExpressionFormatter::formatIdentifier)
+                .collect(joining("."));
+    }
+
+    public static String formatIdentifier(String s)
+    {
+        return '"' + s.replace("\"", "\"\"") + '"';
     }
 
     public static class Formatter
@@ -144,11 +163,17 @@ public final class ExpressionFormatter
         }
 
         @Override
+        protected String visitCurrentUser(CurrentUser node, Void context)
+        {
+            return "CURRENT_USER";
+        }
+
+        @Override
         protected String visitCurrentTime(CurrentTime node, Void context)
         {
             StringBuilder builder = new StringBuilder();
 
-            builder.append(node.getType().getName());
+            builder.append(node.getFunction().getName());
 
             if (node.getPrecision() != null) {
                 builder.append('(')
@@ -224,12 +249,13 @@ public final class ExpressionFormatter
         @Override
         protected String visitDoubleLiteral(DoubleLiteral node, Void context)
         {
-            return Double.toString(node.getValue());
+            return doubleFormatter.get().format(node.getValue());
         }
 
         @Override
         protected String visitDecimalLiteral(DecimalLiteral node, Void context)
         {
+            // TODO return node value without "DECIMAL '..'" when FeaturesConfig#parseDecimalLiteralsAsDouble switch is removed
             return "DECIMAL '" + node.getValue() + "'";
         }
 
@@ -315,15 +341,6 @@ public final class ExpressionFormatter
             return baseString + "." + process(node.getField());
         }
 
-        private static String formatQualifiedName(QualifiedName name)
-        {
-            List<String> parts = new ArrayList<>();
-            for (String part : name.getParts()) {
-                parts.add(formatIdentifier(part));
-            }
-            return Joiner.on('.').join(parts);
-        }
-
         @Override
         public String visitFieldReference(FieldReference node, Void context)
         {
@@ -352,6 +369,10 @@ public final class ExpressionFormatter
             }
 
             builder.append(')');
+
+            if (node.isIgnoreNulls()) {
+                builder.append(" IGNORE NULLS");
+            }
 
             if (node.getFilter().isPresent()) {
                 builder.append(" FILTER ").append(visitFilter(node.getFilter().get(), context));
@@ -392,7 +413,7 @@ public final class ExpressionFormatter
         @Override
         protected String visitLogicalBinaryExpression(LogicalBinaryExpression node, Void context)
         {
-            return formatBinaryExpression(node.getType().toString(), node.getLeft(), node.getRight());
+            return formatBinaryExpression(node.getOperator().toString(), node.getLeft(), node.getRight());
         }
 
         @Override
@@ -404,7 +425,7 @@ public final class ExpressionFormatter
         @Override
         protected String visitComparisonExpression(ComparisonExpression node, Void context)
         {
-            return formatBinaryExpression(node.getType().getValue(), node.getLeft(), node.getRight());
+            return formatBinaryExpression(node.getOperator().getValue(), node.getLeft(), node.getRight());
         }
 
         @Override
@@ -473,7 +494,7 @@ public final class ExpressionFormatter
         @Override
         protected String visitArithmeticBinary(ArithmeticBinaryExpression node, Void context)
         {
-            return formatBinaryExpression(node.getType().getValue(), node.getLeft(), node.getRight());
+            return formatBinaryExpression(node.getOperator().getValue(), node.getLeft(), node.getRight());
         }
 
         @Override
@@ -486,10 +507,10 @@ public final class ExpressionFormatter
                     .append(" LIKE ")
                     .append(process(node.getPattern(), context));
 
-            if (node.getEscape() != null) {
+            node.getEscape().ifPresent(escape -> {
                 builder.append(" ESCAPE ")
-                        .append(process(node.getEscape(), context));
-            }
+                        .append(process(escape, context));
+            });
 
             builder.append(')');
 
@@ -643,7 +664,7 @@ public final class ExpressionFormatter
                     .append("(")
                     .append(process(node.getValue(), context))
                     .append(' ')
-                    .append(node.getComparisonType().getValue())
+                    .append(node.getOperator().getValue())
                     .append(' ')
                     .append(node.getQuantifier().toString())
                     .append(' ')
@@ -668,18 +689,12 @@ public final class ExpressionFormatter
                     .map((e) -> process(e, null))
                     .iterator());
         }
-
-        private static String formatIdentifier(String s)
-        {
-            // TODO: handle escaping properly
-            return '"' + s + '"';
-        }
     }
 
     static String formatStringLiteral(String s)
     {
         s = s.replace("'", "''");
-        if (isAsciiPrintable(s)) {
+        if (CharMatcher.inRange((char) 0x20, (char) 0x7E).matchesAllOf(s)) {
             return "'" + s + "'";
         }
 
@@ -733,7 +748,7 @@ public final class ExpressionFormatter
         for (GroupingElement groupingElement : groupingElements) {
             String result = "";
             if (groupingElement instanceof SimpleGroupBy) {
-                Set<Expression> columns = ImmutableSet.copyOf(((SimpleGroupBy) groupingElement).getColumnExpressions());
+                List<Expression> columns = ((SimpleGroupBy) groupingElement).getExpressions();
                 if (columns.size() == 1) {
                     result = formatExpression(getOnlyElement(columns), parameters);
                 }
@@ -744,28 +759,18 @@ public final class ExpressionFormatter
             else if (groupingElement instanceof GroupingSets) {
                 result = format("GROUPING SETS (%s)", Joiner.on(", ").join(
                         ((GroupingSets) groupingElement).getSets().stream()
-                                .map(ExpressionFormatter::formatGroupingSet)
+                                .map(e -> formatGroupingSet(e, parameters))
                                 .iterator()));
             }
             else if (groupingElement instanceof Cube) {
-                result = format("CUBE %s", formatGroupingSet(((Cube) groupingElement).getColumns()));
+                result = format("CUBE %s", formatGroupingSet(((Cube) groupingElement).getExpressions(), parameters));
             }
             else if (groupingElement instanceof Rollup) {
-                result = format("ROLLUP %s", formatGroupingSet(((Rollup) groupingElement).getColumns()));
+                result = format("ROLLUP %s", formatGroupingSet(((Rollup) groupingElement).getExpressions(), parameters));
             }
             resultStrings.add(result);
         }
         return Joiner.on(", ").join(resultStrings.build());
-    }
-
-    private static boolean isAsciiPrintable(String s)
-    {
-        for (int i = 0; i < s.length(); i++) {
-            if (!isAsciiPrintable(s.charAt(i))) {
-                return false;
-            }
-        }
-        return true;
     }
 
     private static boolean isAsciiPrintable(int codePoint)
@@ -776,16 +781,11 @@ public final class ExpressionFormatter
         return true;
     }
 
-    private static String formatGroupingSet(Set<Expression> groupingSet, Optional<List<Expression>> parameters)
+    private static String formatGroupingSet(List<Expression> groupingSet, Optional<List<Expression>> parameters)
     {
         return format("(%s)", Joiner.on(", ").join(groupingSet.stream()
                 .map(e -> formatExpression(e, parameters))
                 .iterator()));
-    }
-
-    private static String formatGroupingSet(List<QualifiedName> groupingSet)
-    {
-        return format("(%s)", Joiner.on(", ").join(groupingSet));
     }
 
     private static Function<SortItem, String> sortItemFormatterFunction(Optional<List<Expression>> parameters)

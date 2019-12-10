@@ -52,6 +52,7 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
@@ -163,6 +164,7 @@ public class MongoPageSink
         }
         if (type instanceof DecimalType) {
             // TODO: decimal type might not support yet
+            // TODO: this code is likely wrong and should switch to Decimals.readBigDecimal()
             DecimalType decimalType = (DecimalType) type;
             BigInteger unscaledValue;
             if (decimalType.isShort()) {
@@ -176,7 +178,7 @@ public class MongoPageSink
         if (isArrayType(type)) {
             Type elementType = type.getTypeParameters().get(0);
 
-            Block arrayBlock = block.getObject(position, Block.class);
+            Block arrayBlock = block.getBlock(position);
 
             List<Object> list = new ArrayList<>(arrayBlock.getPositionCount());
             for (int i = 0; i < arrayBlock.getPositionCount(); i++) {
@@ -190,7 +192,7 @@ public class MongoPageSink
             Type keyType = type.getTypeParameters().get(0);
             Type valueType = type.getTypeParameters().get(1);
 
-            Block mapBlock = block.getObject(position, Block.class);
+            Block mapBlock = block.getBlock(position);
 
             // map type is converted into list of fixed keys document
             List<Object> values = new ArrayList<>(mapBlock.getPositionCount() / 2);
@@ -204,7 +206,7 @@ public class MongoPageSink
             return unmodifiableList(values);
         }
         if (isRowType(type)) {
-            Block rowBlock = block.getObject(position, Block.class);
+            Block rowBlock = block.getBlock(position);
 
             List<Type> fieldTypes = type.getTypeParameters();
             if (fieldTypes.size() != rowBlock.getPositionCount()) {
@@ -223,7 +225,7 @@ public class MongoPageSink
             Map<String, Object> rowValue = new HashMap<>();
             for (int i = 0; i < rowBlock.getPositionCount(); i++) {
                 rowValue.put(
-                        type.getTypeSignature().getParameters().get(i).getNamedTypeSignature().getName(),
+                        type.getTypeSignature().getParameters().get(i).getNamedTypeSignature().getName().orElse("field" + i),
                         getObjectValue(fieldTypes.get(i), rowBlock, i));
             }
             return unmodifiableMap(rowValue);
@@ -238,6 +240,8 @@ public class MongoPageSink
                 .stream()
                 .map(TypeSignatureParameter::getNamedTypeSignature)
                 .map(NamedTypeSignature::getName)
+                .filter(Optional::isPresent)
+                .map(Optional::get)
                 .allMatch(name -> name.startsWith(implicitPrefix));
     }
 

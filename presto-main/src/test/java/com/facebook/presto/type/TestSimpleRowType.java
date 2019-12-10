@@ -14,7 +14,6 @@
 package com.facebook.presto.type;
 
 import com.facebook.presto.spi.block.Block;
-import com.facebook.presto.spi.block.BlockBuilderStatus;
 import com.facebook.presto.spi.block.RowBlockBuilder;
 import com.facebook.presto.spi.block.SingleRowBlockWriter;
 import com.facebook.presto.spi.type.Type;
@@ -38,7 +37,7 @@ public class TestSimpleRowType
 
     private static Block createTestBlock()
     {
-        RowBlockBuilder blockBuilder = (RowBlockBuilder) TYPE.createBlockBuilder(new BlockBuilderStatus(), 3);
+        RowBlockBuilder blockBuilder = (RowBlockBuilder) TYPE.createBlockBuilder(null, 3);
 
         SingleRowBlockWriter singleRowBlockWriter;
 
@@ -63,12 +62,12 @@ public class TestSimpleRowType
     @Override
     protected Object getGreaterValue(Object value)
     {
-        RowBlockBuilder blockBuilder = (RowBlockBuilder) TYPE.createBlockBuilder(new BlockBuilderStatus(), 1);
+        RowBlockBuilder blockBuilder = (RowBlockBuilder) TYPE.createBlockBuilder(null, 1);
         SingleRowBlockWriter singleRowBlockWriter;
 
         Block block = (Block) value;
         singleRowBlockWriter = blockBuilder.beginBlockEntry();
-        BIGINT.writeLong(singleRowBlockWriter, block.getSingleValueBlock(0).getLong(0, 0) + 1);
+        BIGINT.writeLong(singleRowBlockWriter, block.getSingleValueBlock(0).getLong(0) + 1);
         VARCHAR.writeSlice(singleRowBlockWriter, block.getSingleValueBlock(1).getSlice(0, 0, 1));
         blockBuilder.closeEntry();
 

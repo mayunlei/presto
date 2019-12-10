@@ -15,11 +15,16 @@ package com.facebook.presto.spi.block;
 
 import org.openjdk.jol.info.ClassLayout;
 
-import java.util.List;
+import javax.annotation.Nullable;
+
+import java.util.Optional;
 import java.util.function.BiConsumer;
 
+import static com.facebook.presto.spi.block.BlockUtil.checkArrayRange;
 import static com.facebook.presto.spi.block.BlockUtil.checkValidRegion;
 import static com.facebook.presto.spi.block.BlockUtil.compactArray;
+import static com.facebook.presto.spi.block.BlockUtil.countUsedPositions;
+import static com.facebook.presto.spi.block.BlockUtil.internalPositionInRange;
 import static io.airlift.slice.SizeOf.sizeOf;
 
 public class ByteArrayBlock
@@ -29,15 +34,16 @@ public class ByteArrayBlock
 
     private final int arrayOffset;
     private final int positionCount;
+    @Nullable
     private final boolean[] valueIsNull;
     private final byte[] values;
 
     private final long sizeInBytes;
     private final long retainedSizeInBytes;
 
-    public ByteArrayBlock(int positionCount, boolean[] valueIsNull, byte[] values)
+    public ByteArrayBlock(int positionCount, Optional<boolean[]> valueIsNull, byte[] values)
     {
-        this(0, positionCount, valueIsNull, values);
+        this(0, positionCount, valueIsNull.orElse(null), values);
     }
 
     ByteArrayBlock(int arrayOffset, int positionCount, boolean[] valueIsNull, byte[] values)
@@ -56,7 +62,7 @@ public class ByteArrayBlock
         }
         this.values = values;
 
-        if (valueIsNull.length - arrayOffset < positionCount) {
+        if (valueIsNull != null && valueIsNull.length - arrayOffset < positionCount) {
             throw new IllegalArgumentException("isNull length is less than positionCount");
         }
         this.valueIsNull = valueIsNull;
@@ -78,16 +84,30 @@ public class ByteArrayBlock
     }
 
     @Override
+    public long getPositionsSizeInBytes(boolean[] positions)
+    {
+        return (Byte.BYTES + Byte.BYTES) * (long) countUsedPositions(positions);
+    }
+
+    @Override
     public long getRetainedSizeInBytes()
     {
         return retainedSizeInBytes;
     }
 
     @Override
+    public long getEstimatedDataSizeForStats(int position)
+    {
+        return isNull(position) ? 0 : Byte.BYTES;
+    }
+
+    @Override
     public void retainedBytesForEachPart(BiConsumer<Object, Long> consumer)
     {
         consumer.accept(values, sizeOf(values));
-        consumer.accept(valueIsNull, sizeOf(valueIsNull));
+        if (valueIsNull != null) {
+            consumer.accept(valueIsNull, sizeOf(valueIsNull));
+        }
         consumer.accept(this, (long) INSTANCE_SIZE);
     }
 
@@ -98,20 +118,23 @@ public class ByteArrayBlock
     }
 
     @Override
-    public byte getByte(int position, int offset)
+    public byte getByte(int position)
     {
         checkReadablePosition(position);
-        if (offset != 0) {
-            throw new IllegalArgumentException("offset must be zero");
-        }
-        return values[position + arrayOffset];
+        return getByteUnchecked(position + arrayOffset);
+    }
+
+    @Override
+    public boolean mayHaveNull()
+    {
+        return valueIsNull != null;
     }
 
     @Override
     public boolean isNull(int position)
     {
         checkReadablePosition(position);
-        return valueIsNull[position + arrayOffset];
+        return valueIsNull != null && isNullUnchecked(position + arrayOffset);
     }
 
     @Override
@@ -119,6 +142,7 @@ public class ByteArrayBlock
     {
         checkReadablePosition(position);
         blockBuilder.writeByte(values[position + arrayOffset]);
+        blockBuilder.closeEntry();
     }
 
     @Override
@@ -126,23 +150,31 @@ public class ByteArrayBlock
     {
         checkReadablePosition(position);
         return new ByteArrayBlock(
+                0,
                 1,
-                new boolean[] {valueIsNull[position + arrayOffset]},
+                isNull(position) ? new boolean[] {true} : null,
                 new byte[] {values[position + arrayOffset]});
     }
 
     @Override
-    public Block copyPositions(List<Integer> positions)
+    public Block copyPositions(int[] positions, int offset, int length)
     {
-        boolean[] newValueIsNull = new boolean[positions.size()];
-        byte[] newValues = new byte[positions.size()];
-        for (int i = 0; i < positions.size(); i++) {
-            int position = positions.get(i);
+        checkArrayRange(positions, offset, length);
+
+        boolean[] newValueIsNull = null;
+        if (valueIsNull != null) {
+            newValueIsNull = new boolean[length];
+        }
+        byte[] newValues = new byte[length];
+        for (int i = 0; i < length; i++) {
+            int position = positions[offset + i];
             checkReadablePosition(position);
-            newValueIsNull[i] = valueIsNull[position + arrayOffset];
+            if (valueIsNull != null) {
+                newValueIsNull[i] = valueIsNull[position + arrayOffset];
+            }
             newValues[i] = values[position + arrayOffset];
         }
-        return new ByteArrayBlock(positions.size(), newValueIsNull, newValues);
+        return new ByteArrayBlock(0, length, newValueIsNull, newValues);
     }
 
     @Override
@@ -159,19 +191,19 @@ public class ByteArrayBlock
         checkValidRegion(getPositionCount(), positionOffset, length);
 
         positionOffset += arrayOffset;
-        boolean[] newValueIsNull = compactArray(valueIsNull, positionOffset, length);
+        boolean[] newValueIsNull = valueIsNull == null ? null : compactArray(valueIsNull, positionOffset, length);
         byte[] newValues = compactArray(values, positionOffset, length);
 
         if (newValueIsNull == valueIsNull && newValues == values) {
             return this;
         }
-        return new ByteArrayBlock(length, newValueIsNull, newValues);
+        return new ByteArrayBlock(0, length, newValueIsNull, newValues);
     }
 
     @Override
-    public BlockEncoding getEncoding()
+    public String getEncodingName()
     {
-        return new ByteArrayBlockEncoding();
+        return ByteArrayBlockEncoding.NAME;
     }
 
     @Override
@@ -188,5 +220,26 @@ public class ByteArrayBlock
         if (position < 0 || position >= getPositionCount()) {
             throw new IllegalArgumentException("position is not valid");
         }
+    }
+
+    @Override
+    public int getOffsetBase()
+    {
+        return arrayOffset;
+    }
+
+    @Override
+    public boolean isNullUnchecked(int internalPosition)
+    {
+        assert mayHaveNull() : "no nulls present";
+        assert internalPositionInRange(internalPosition, getOffsetBase(), getPositionCount());
+        return valueIsNull[internalPosition];
+    }
+
+    @Override
+    public byte getByteUnchecked(int internalPosition)
+    {
+        assert internalPositionInRange(internalPosition, getOffsetBase(), getPositionCount());
+        return values[internalPosition];
     }
 }

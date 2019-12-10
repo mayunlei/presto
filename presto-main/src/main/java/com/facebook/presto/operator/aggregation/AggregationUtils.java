@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.operator.aggregation;
 
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.operator.aggregation.state.CentralMomentsState;
 import com.facebook.presto.operator.aggregation.state.CorrelationState;
 import com.facebook.presto.operator.aggregation.state.CovarianceState;
@@ -20,10 +21,12 @@ import com.facebook.presto.operator.aggregation.state.RegressionState;
 import com.facebook.presto.operator.aggregation.state.VarianceState;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.block.Block;
+import com.facebook.presto.spi.plan.AggregationNode;
 import com.facebook.presto.spi.type.TypeSignature;
 import com.google.common.base.CaseFormat;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.function.Function;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -33,6 +36,38 @@ public final class AggregationUtils
 {
     private AggregationUtils()
     {
+    }
+
+    public static boolean isDecomposable(AggregationNode aggregationNode, FunctionManager functionManager)
+    {
+        boolean hasOrderBy = aggregationNode.getAggregations().values().stream()
+                .map(AggregationNode.Aggregation::getOrderBy)
+                .anyMatch(Optional::isPresent);
+
+        boolean hasDistinct = aggregationNode.getAggregations().values().stream()
+                .anyMatch(AggregationNode.Aggregation::isDistinct);
+
+        boolean decomposableFunctions = aggregationNode.getAggregations().values().stream()
+                .map(AggregationNode.Aggregation::getFunctionHandle)
+                .map(functionManager::getAggregateFunctionImplementation)
+                .allMatch(InternalAggregationFunction::isDecomposable);
+
+        return !hasOrderBy && !hasDistinct && decomposableFunctions;
+    }
+
+    public static boolean hasSingleNodeExecutionPreference(AggregationNode aggregationNode, FunctionManager functionManager)
+    {
+        // There are two kinds of aggregations the have single node execution preference:
+        //
+        // 1. aggregations with only empty grouping sets like
+        //
+        // SELECT count(*) FROM lineitem;
+        //
+        // there is no need for distributed aggregation. Single node FINAL aggregation will suffice,
+        // since all input have to be aggregated into one line output.
+        //
+        // 2. aggregations that must produce default output and are not decomposable, we can not distribute them.
+        return (aggregationNode.hasEmptyGroupingSet() && !aggregationNode.hasNonEmptyGroupingSet()) || (aggregationNode.hasDefaultOutput() && !isDecomposable(aggregationNode, functionManager));
     }
 
     public static void updateVarianceState(VarianceState state, double value)
@@ -63,35 +98,41 @@ public final class AggregationUtils
 
     public static void updateCovarianceState(CovarianceState state, double x, double y)
     {
-        state.setCount(state.getCount() + 1);
-        state.setSumXY(state.getSumXY() + x * y);
-        state.setSumX(state.getSumX() + x);
-        state.setSumY(state.getSumY() + y);
+        long n = state.getCount() + 1;
+        state.setCount(n);
+        double oldMeanX = state.getMeanX();
+        state.setMeanX(oldMeanX + (x - oldMeanX) / n);
+        double oldMeanY = state.getMeanY();
+        double newMeanY = oldMeanY + (y - oldMeanY) / n;
+        state.setMeanY(newMeanY);
+        state.setC2(state.getC2() + (x - oldMeanX) * (y - newMeanY));
     }
 
     public static double getCovarianceSample(CovarianceState state)
     {
-        return (state.getSumXY() - state.getSumX() * state.getSumY() / state.getCount()) / (state.getCount() - 1);
+        return state.getC2() / (state.getCount() - 1);
     }
 
     public static double getCovariancePopulation(CovarianceState state)
     {
-        return (state.getSumXY() - state.getSumX() * state.getSumY() / state.getCount()) / state.getCount();
+        return state.getC2() / state.getCount();
     }
 
     public static void updateCorrelationState(CorrelationState state, double x, double y)
     {
+        double oldMeanX = state.getMeanX();
+        double oldMeanY = state.getMeanY();
         updateCovarianceState(state, x, y);
-        state.setSumXSquare(state.getSumXSquare() + x * x);
-        state.setSumYSquare(state.getSumYSquare() + y * y);
+        state.setM2X(state.getM2X() + (x - oldMeanX) * (x - state.getMeanX()));
+        state.setM2Y(state.getM2Y() + (y - oldMeanY) * (y - state.getMeanY()));
     }
 
     public static double getCorrelation(CorrelationState state)
     {
         // This is defined as covariance(x, y) / (stdev(x) * stdev(y))
-        double covariance = state.getCount() * state.getSumXY() - state.getSumX() * state.getSumY();
-        double stdevX = Math.sqrt(state.getCount() * state.getSumXSquare() - state.getSumX() * state.getSumX());
-        double stdevY = Math.sqrt(state.getCount() * state.getSumYSquare() - state.getSumY() * state.getSumY());
+        double covariance = state.getC2();
+        double stdevX = Math.sqrt(state.getM2X());
+        double stdevY = Math.sqrt(state.getM2Y());
 
         // stdevX and stdevY deliberately not checked for zero because the result can be Infinity or NaN even
         // if they are both not zero
@@ -100,15 +141,15 @@ public final class AggregationUtils
 
     public static void updateRegressionState(RegressionState state, double x, double y)
     {
+        double oldMeanX = state.getMeanX();
         updateCovarianceState(state, x, y);
-        state.setSumXSquare(state.getSumXSquare() + x * x);
+        state.setM2X(state.getM2X() + (x - oldMeanX) * (x - state.getMeanX()));
     }
 
     public static double getRegressionSlope(RegressionState state)
     {
-        // Math comes from ISO9075-2:2011(E) 10.9 General Rules 7 c xii
-        double dividend = state.getCount() * state.getSumXY() - state.getSumX() * state.getSumY();
-        double divisor = state.getCount() * state.getSumXSquare() - state.getSumX() * state.getSumX();
+        double dividend = state.getC2();
+        double divisor = state.getM2X();
 
         // divisor deliberately not checked for zero because the result can be Infty or NaN even if it is not zero
         return dividend / divisor;
@@ -116,12 +157,11 @@ public final class AggregationUtils
 
     public static double getRegressionIntercept(RegressionState state)
     {
-        // Math comes from ISO9075-2:2011(E) 10.9 General Rules 7 c xiii
-        double dividend = state.getSumY() * state.getSumXSquare() - state.getSumX() * state.getSumXY();
-        double divisor = state.getCount() * state.getSumXSquare() - state.getSumX() * state.getSumX();
+        double slope = getRegressionSlope(state);
+        double meanX = state.getMeanX();
+        double meanY = state.getMeanY();
 
-        // divisor deliberately not checked for zero because the result can be Infty or NaN even if it is not zero
-        return dividend / divisor;
+        return meanY - slope * meanX;
     }
 
     public static void mergeVarianceState(VarianceState state, VarianceState otherState)
@@ -137,8 +177,7 @@ public final class AggregationUtils
         long newCount = count + state.getCount();
         double newMean = ((count * mean) + (state.getCount() * state.getMean())) / (double) newCount;
         double delta = mean - state.getMean();
-        double m2Delta = m2 + delta * delta * count * state.getCount() / (double) newCount;
-        state.setM2(state.getM2() + m2Delta);
+        state.setM2(state.getM2() + m2 + delta * delta * count * state.getCount() / (double) newCount);
         state.setCount(newCount);
         state.setMean(newMean);
     }
@@ -179,10 +218,17 @@ public final class AggregationUtils
 
     private static void updateCovarianceState(CovarianceState state, CovarianceState otherState)
     {
-        state.setSumX(state.getSumX() + otherState.getSumX());
-        state.setSumY(state.getSumY() + otherState.getSumY());
-        state.setSumXY(state.getSumXY() + otherState.getSumXY());
-        state.setCount(state.getCount() + otherState.getCount());
+        long na = state.getCount();
+        long nb = otherState.getCount();
+        long n = na + nb;
+        state.setCount(n);
+        double meanX = state.getMeanX();
+        double meanY = state.getMeanY();
+        double deltaX = otherState.getMeanX() - meanX;
+        double deltaY = otherState.getMeanY() - meanY;
+        state.setC2(state.getC2() + otherState.getC2() + deltaX * deltaY * na * nb / (double) n);
+        state.setMeanX(meanX + deltaX * nb / (double) n);
+        state.setMeanY(meanY + deltaY * nb / (double) n);
     }
 
     public static void mergeCovarianceState(CovarianceState state, CovarianceState otherState)
@@ -200,9 +246,11 @@ public final class AggregationUtils
             return;
         }
 
+        long na = state.getCount();
+        long nb = otherState.getCount();
+        state.setM2X(state.getM2X() + otherState.getM2X() + na * nb * Math.pow(state.getMeanX() - otherState.getMeanX(), 2) / (double) (na + nb));
+        state.setM2Y(state.getM2Y() + otherState.getM2Y() + na * nb * Math.pow(state.getMeanY() - otherState.getMeanY(), 2) / (double) (na + nb));
         updateCovarianceState(state, otherState);
-        state.setSumXSquare(state.getSumXSquare() + otherState.getSumXSquare());
-        state.setSumYSquare(state.getSumYSquare() + otherState.getSumYSquare());
     }
 
     public static void mergeRegressionState(RegressionState state, RegressionState otherState)
@@ -211,8 +259,10 @@ public final class AggregationUtils
             return;
         }
 
+        long na = state.getCount();
+        long nb = otherState.getCount();
+        state.setM2X(state.getM2X() + otherState.getM2X() + na * nb * Math.pow(state.getMeanX() - otherState.getMeanX(), 2) / (double) (na + nb));
         updateCovarianceState(state, otherState);
-        state.setSumXSquare(state.getSumXSquare() + otherState.getSumXSquare());
     }
 
     public static String generateAggregationName(String baseName, TypeSignature outputType, List<TypeSignature> inputTypes)

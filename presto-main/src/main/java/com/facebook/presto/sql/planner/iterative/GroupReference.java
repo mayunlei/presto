@@ -13,23 +13,22 @@
  */
 package com.facebook.presto.sql.planner.iterative;
 
-import com.facebook.presto.sql.planner.Symbol;
-import com.facebook.presto.sql.planner.plan.PlanNode;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
-import com.facebook.presto.sql.planner.plan.PlanVisitor;
+import com.facebook.presto.spi.plan.PlanNode;
+import com.facebook.presto.spi.plan.PlanNodeId;
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
+import com.facebook.presto.sql.planner.plan.InternalPlanNode;
+import com.facebook.presto.sql.planner.plan.InternalPlanVisitor;
 import com.google.common.collect.ImmutableList;
 
 import java.util.List;
 
-import static com.google.common.base.Preconditions.checkArgument;
-
 public class GroupReference
-        extends PlanNode
+        extends InternalPlanNode
 {
     private final int groupId;
-    private final List<Symbol> outputs;
+    private final List<VariableReferenceExpression> outputs;
 
-    public GroupReference(PlanNodeId id, int groupId, List<Symbol> outputs)
+    public GroupReference(PlanNodeId id, int groupId, List<VariableReferenceExpression> outputs)
     {
         super(id);
         this.groupId = groupId;
@@ -44,17 +43,17 @@ public class GroupReference
     @Override
     public List<PlanNode> getSources()
     {
-        return ImmutableList.of();
+        throw new UnsupportedOperationException();
     }
 
     @Override
-    public <R, C> R accept(PlanVisitor<R, C> visitor, C context)
+    public <R, C> R accept(InternalPlanVisitor<R, C> visitor, C context)
     {
         return visitor.visitGroupReference(this, context);
     }
 
     @Override
-    public List<Symbol> getOutputSymbols()
+    public List<VariableReferenceExpression> getOutputVariables()
     {
         return outputs;
     }
@@ -62,7 +61,6 @@ public class GroupReference
     @Override
     public PlanNode replaceChildren(List<PlanNode> newChildren)
     {
-        checkArgument(newChildren.isEmpty(), "newChildren is not empty");
-        return this;
+        throw new UnsupportedOperationException();
     }
 }

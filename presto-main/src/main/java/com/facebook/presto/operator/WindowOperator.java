@@ -13,14 +13,15 @@
  */
 package com.facebook.presto.operator;
 
+import com.facebook.presto.memory.context.LocalMemoryContext;
 import com.facebook.presto.operator.window.FramedWindowFunction;
 import com.facebook.presto.operator.window.WindowPartition;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PageBuilder;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.SortOrder;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
@@ -60,7 +61,6 @@ public class WindowOperator
         private final List<SortOrder> sortOrder;
         private final int preSortedChannelPrefix;
         private final int expectedPositions;
-        private final List<Type> types;
         private boolean closed;
         private final PagesIndex.Factory pagesIndexFactory;
 
@@ -104,18 +104,6 @@ public class WindowOperator
             this.sortOrder = ImmutableList.copyOf(sortOrder);
             this.preSortedChannelPrefix = preSortedChannelPrefix;
             this.expectedPositions = expectedPositions;
-            this.types = Stream.concat(
-                    outputChannels.stream()
-                            .map(sourceTypes::get),
-                    windowFunctionDefinitions.stream()
-                            .map(WindowFunctionDefinition::getType))
-                    .collect(toImmutableList());
-        }
-
-        @Override
-        public List<Type> getTypes()
-        {
-            return types;
         }
 
         @Override
@@ -176,7 +164,7 @@ public class WindowOperator
     private final List<FramedWindowFunction> windowFunctions;
     private final List<Integer> orderChannels;
     private final List<SortOrder> ordering;
-    private final List<Type> types;
+    private final LocalMemoryContext localUserMemoryContext;
 
     private final int[] preGroupedChannels;
 
@@ -190,7 +178,7 @@ public class WindowOperator
     private final PageBuilder pageBuilder;
 
     private final WindowInfo.DriverWindowInfoBuilder windowInfo;
-    private AtomicReference<Optional<WindowInfo.DriverWindowInfo>> driverWindowInfo = new AtomicReference<>(Optional.empty());
+    private final AtomicReference<Optional<WindowInfo.DriverWindowInfo>> driverWindowInfo = new AtomicReference<>(Optional.empty());
 
     private State state = State.NEEDS_INPUT;
 
@@ -225,12 +213,13 @@ public class WindowOperator
         checkArgument(preSortedChannelPrefix == 0 || ImmutableSet.copyOf(preGroupedChannels).equals(ImmutableSet.copyOf(partitionChannels)), "preSortedChannelPrefix can only be greater than zero if all partition channels are pre-grouped");
 
         this.operatorContext = operatorContext;
+        this.localUserMemoryContext = operatorContext.localUserMemoryContext();
         this.outputChannels = Ints.toArray(outputChannels);
         this.windowFunctions = windowFunctionDefinitions.stream()
                 .map(functionDefinition -> new FramedWindowFunction(functionDefinition.createWindowFunction(), functionDefinition.getFrameInfo()))
                 .collect(toImmutableList());
 
-        this.types = Stream.concat(
+        List<Type> types = Stream.concat(
                 outputChannels.stream()
                         .map(sourceTypes::get),
                 windowFunctionDefinitions.stream()
@@ -250,7 +239,7 @@ public class WindowOperator
         this.preSortedPartitionHashStrategy = pagesIndex.createPagesHashStrategy(preSortedChannels, OptionalInt.empty());
         this.peerGroupHashStrategy = pagesIndex.createPagesHashStrategy(sortChannels, OptionalInt.empty());
 
-        this.pageBuilder = new PageBuilder(this.types);
+        this.pageBuilder = new PageBuilder(types);
 
         if (preSortedChannelPrefix > 0) {
             // This already implies that set(preGroupedChannels) == set(partitionChannels) (enforced with checkArgument)
@@ -276,12 +265,6 @@ public class WindowOperator
     public OperatorContext getOperatorContext()
     {
         return operatorContext;
-    }
-
-    @Override
-    public List<Type> getTypes()
-    {
-        return types;
     }
 
     @Override
@@ -324,7 +307,7 @@ public class WindowOperator
         if (processPendingInput()) {
             state = State.HAS_OUTPUT;
         }
-        operatorContext.setMemoryReservation(pagesIndex.getEstimatedSize().toBytes());
+        localUserMemoryContext.setBytes(pagesIndex.getEstimatedSize().toBytes());
     }
 
     /**
@@ -394,7 +377,7 @@ public class WindowOperator
         }
 
         Page page = extractOutput();
-        operatorContext.setMemoryReservation(pagesIndex.getEstimatedSize().toBytes());
+        localUserMemoryContext.setBytes(pagesIndex.getEstimatedSize().toBytes());
         return page;
     }
 
@@ -491,56 +474,27 @@ public class WindowOperator
     static int findEndPosition(int startPosition, int endPosition, BiPredicate<Integer, Integer> comparator)
     {
         checkArgument(startPosition >= 0, "startPosition must be greater or equal than zero: %s", startPosition);
-        checkArgument(endPosition > 0, "endPosition must be greater than zero: %s", endPosition);
-        checkArgument(startPosition < endPosition, "startPosition must be less than endPosition: %s < %s", startPosition, endPosition);
+        checkArgument(startPosition < endPosition, "startPosition (%s) must be less than endPosition (%s)", startPosition, endPosition);
 
         int left = startPosition;
-        int right = endPosition - 1;
-        for (int i = 0; i < endPosition - startPosition; i++) {
-            int distance = right - left;
+        int right = endPosition;
 
-            if (distance == 0) {
-                return right + 1;
-            }
+        while (left + 1 < right) {
+            int middle = (left + right) >>> 1;
 
-            if (distance == 1) {
-                if (comparator.test(left, right)) {
-                    return right + 1;
-                }
-                return right;
-            }
-
-            int mid = left + distance / 2;
-            if (comparator.test(left, mid)) {
-                // explore to the right
-                left = mid;
+            if (comparator.test(startPosition, middle)) {
+                left = middle;
             }
             else {
-                // explore to the left
-                right = mid;
+                right = middle;
             }
         }
 
-        // hasn't managed to find a solution after N iteration. Probably the input is not sorted. Lets verify it.
-        for (int first = startPosition; first < endPosition; first++) {
-            boolean previousPairsWereEqual = true;
-            for (int second = first + 1; second < endPosition; second++) {
-                if (!comparator.test(first, second)) {
-                    previousPairsWereEqual = false;
-                }
-                else if (!previousPairsWereEqual) {
-                    throw new IllegalArgumentException("The input is not sorted");
-                }
-            }
-        }
-
-        // the input is sorted, but the algorithm has still failed
-        throw new IllegalArgumentException("failed to find a group ending");
+        return right;
     }
 
     @Override
     public void close()
-            throws Exception
     {
         driverWindowInfo.set(Optional.of(windowInfo.build()));
     }

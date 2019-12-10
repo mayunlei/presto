@@ -175,7 +175,6 @@ public class TestUnscaledDecimal128Arithmetic
 
     @Test
     public void testMultiply256()
-            throws Exception
     {
         assertMultiply256(MAX_DECIMAL, MAX_DECIMAL, wrappedLongArray(0xECEBBB8000000001L, 0xE0FF0CA0BC87870BL, 0x0764B4ABE8652978L, 0x161BCCA7119915B5L));
         assertMultiply256(MIN_DECIMAL, MIN_DECIMAL, wrappedLongArray(0xECEBBB8000000001L, 0xE0FF0CA0BC87870BL, 0x0764B4ABE8652978L, 0x161BCCA7119915B5L));
@@ -292,6 +291,7 @@ public class TestUnscaledDecimal128Arithmetic
         // single int divisor
         assertDivideAllSigns(new int[] {1423957378, -1444436990, -925263858, 1106345725}, new int[] {2042457708, 0, 0, 0});
         assertDivideAllSigns(new int[] {0, 0xF7000000, 0, 0x39000000}, new int[] {-1765820914, 0, 0, 0});
+        assertDivideAllSigns(new int[] {-1981284352, -1966660860, 0, 0}, new int[] {-1794967296, 0, 0, 0});
 
         // normalization scale = 1
         assertDivideAllSigns(new int[] {0x0FF00210, 0xF7001230, 0xFB00AC00, 0x39003500}, new int[] {-1765820914, 2042457708, 0xFFFFFFFF, 0});
@@ -445,7 +445,6 @@ public class TestUnscaledDecimal128Arithmetic
 
     @Test
     public void testShiftLeftMultiPrecision()
-            throws Exception
     {
         assertEquals(shiftLeftMultiPrecision(
                 new int[] {0b10100001010001011010000101000101, 0b01010110100101101011010101010101, 0b01010010111110001111100010101010,
@@ -486,7 +485,6 @@ public class TestUnscaledDecimal128Arithmetic
 
     @Test
     public void testShiftRightMultiPrecision()
-            throws Exception
     {
         assertEquals(shiftRightMultiPrecision(
                 new int[] {0b10100001010001011010000101000101, 0b01010110100101101011010101010101, 0b01010010111110001111100010101010,
@@ -543,7 +541,6 @@ public class TestUnscaledDecimal128Arithmetic
 
     @Test
     public void testShiftLeft()
-            throws Exception
     {
         assertEquals(shiftLeft(wrappedLongArray(0x1234567890ABCDEFL, 0xEFDCBA0987654321L), 0), wrappedLongArray(0x1234567890ABCDEFL, 0xEFDCBA0987654321L));
         assertEquals(shiftLeft(wrappedLongArray(0x1234567890ABCDEFL, 0xEFDCBA0987654321L), 1), wrappedLongArray(0x2468ACF121579BDEL, 0xDFB974130ECA8642L));

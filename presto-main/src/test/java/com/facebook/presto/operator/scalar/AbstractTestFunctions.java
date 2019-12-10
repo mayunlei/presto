@@ -14,12 +14,14 @@
 package com.facebook.presto.operator.scalar;
 
 import com.facebook.presto.Session;
+import com.facebook.presto.metadata.BuiltInFunction;
 import com.facebook.presto.metadata.FunctionListBuilder;
 import com.facebook.presto.metadata.Metadata;
-import com.facebook.presto.metadata.SqlFunction;
 import com.facebook.presto.metadata.SqlScalarFunction;
 import com.facebook.presto.spi.ErrorCodeSupplier;
+import com.facebook.presto.spi.Plugin;
 import com.facebook.presto.spi.PrestoException;
+import com.facebook.presto.spi.StandardErrorCode;
 import com.facebook.presto.spi.function.OperatorType;
 import com.facebook.presto.spi.type.DecimalParseResult;
 import com.facebook.presto.spi.type.Decimals;
@@ -27,7 +29,6 @@ import com.facebook.presto.spi.type.SqlDecimal;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.facebook.presto.sql.analyzer.SemanticErrorCode;
-import com.facebook.presto.sql.analyzer.SemanticException;
 import com.google.common.collect.ImmutableList;
 import io.airlift.slice.Slice;
 import org.testng.annotations.AfterClass;
@@ -38,15 +39,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import static com.facebook.airlift.testing.Closeables.closeAllRuntimeException;
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
-import static com.facebook.presto.metadata.FunctionRegistry.mangleOperatorName;
-import static com.facebook.presto.spi.StandardErrorCode.INVALID_CAST_ARGUMENT;
+import static com.facebook.presto.metadata.FunctionExtractor.extractFunctions;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
-import static com.facebook.presto.spi.StandardErrorCode.NUMERIC_VALUE_OUT_OF_RANGE;
 import static com.facebook.presto.spi.type.DecimalType.createDecimalType;
-import static com.facebook.presto.type.UnknownType.UNKNOWN;
-import static io.airlift.testing.Closeables.closeAllRuntimeException;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 import static org.testng.Assert.assertEquals;
@@ -54,7 +52,7 @@ import static org.testng.Assert.fail;
 
 public abstract class AbstractTestFunctions
 {
-    private final Session session;
+    protected final Session session;
     private final FeaturesConfig config;
     protected FunctionAssertions functionAssertions;
 
@@ -76,7 +74,7 @@ public abstract class AbstractTestFunctions
     protected AbstractTestFunctions(Session session, FeaturesConfig config)
     {
         this.session = requireNonNull(session, "session is null");
-        this.config = requireNonNull(config, "config is null");
+        this.config = requireNonNull(config, "config is null").setLegacyLogFunction(true);
     }
 
     @BeforeClass
@@ -99,106 +97,62 @@ public abstract class AbstractTestFunctions
 
     protected void assertOperator(OperatorType operator, String value, Type expectedType, Object expected)
     {
-        functionAssertions.assertFunction(format("\"%s\"(%s)", mangleOperatorName(operator), value), expectedType, expected);
+        functionAssertions.assertFunction(format("\"%s\"(%s)", operator.getFunctionName().getFunctionName(), value), expectedType, expected);
     }
 
     protected void assertDecimalFunction(String statement, SqlDecimal expectedResult)
     {
-        assertFunction(statement,
+        assertFunction(
+                statement,
                 createDecimalType(expectedResult.getPrecision(), expectedResult.getScale()),
                 expectedResult);
     }
 
+    // this is not safe as it catches all RuntimeExceptions
+    @Deprecated
     protected void assertInvalidFunction(String projection)
     {
-        try {
-            evaluateInvalid(projection);
-            fail("Expected to fail");
-        }
-        catch (RuntimeException e) {
-            // Expected
-        }
+        functionAssertions.assertInvalidFunction(projection);
     }
 
-    protected void assertInvalidFunction(String projection, String message)
+    protected void assertInvalidFunction(String projection, StandardErrorCode errorCode, String messagePattern)
     {
-        try {
-            evaluateInvalid(projection);
-            fail("Expected to throw an INVALID_FUNCTION_ARGUMENT exception with message " + message);
-        }
-        catch (PrestoException e) {
-            assertEquals(e.getErrorCode(), INVALID_FUNCTION_ARGUMENT.toErrorCode());
-            assertEquals(e.getMessage(), message);
-        }
+        functionAssertions.assertInvalidFunction(projection, errorCode, messagePattern);
+    }
+
+    protected void assertInvalidFunction(String projection, String messagePattern)
+    {
+        functionAssertions.assertInvalidFunction(projection, INVALID_FUNCTION_ARGUMENT, messagePattern);
     }
 
     protected void assertInvalidFunction(String projection, SemanticErrorCode expectedErrorCode)
     {
-        try {
-            evaluateInvalid(projection);
-            fail(format("Expected to throw %s exception", expectedErrorCode));
-        }
-        catch (SemanticException e) {
-            assertEquals(e.getCode(), expectedErrorCode);
-        }
+        functionAssertions.assertInvalidFunction(projection, expectedErrorCode);
     }
 
     protected void assertInvalidFunction(String projection, SemanticErrorCode expectedErrorCode, String message)
     {
-        try {
-            evaluateInvalid(projection);
-            fail(format("Expected to throw %s exception", expectedErrorCode));
-        }
-        catch (SemanticException e) {
-            assertEquals(e.getCode(), expectedErrorCode);
-            assertEquals(e.getMessage(), message);
-        }
+        functionAssertions.assertInvalidFunction(projection, expectedErrorCode, message);
     }
 
     protected void assertInvalidFunction(String projection, ErrorCodeSupplier expectedErrorCode)
     {
-        try {
-            evaluateInvalid(projection);
-            fail(format("Expected to throw %s exception", expectedErrorCode.toErrorCode()));
-        }
-        catch (PrestoException e) {
-            assertEquals(e.getErrorCode(), expectedErrorCode.toErrorCode());
-        }
+        functionAssertions.assertInvalidFunction(projection, expectedErrorCode);
     }
 
     protected void assertNumericOverflow(String projection, String message)
     {
-        try {
-            evaluateInvalid(projection);
-            fail("Expected to throw an NUMERIC_VALUE_OUT_OF_RANGE exception with message " + message);
-        }
-        catch (PrestoException e) {
-            assertEquals(e.getErrorCode(), NUMERIC_VALUE_OUT_OF_RANGE.toErrorCode());
-            assertEquals(e.getMessage(), message);
-        }
+        functionAssertions.assertNumericOverflow(projection, message);
     }
 
     protected void assertInvalidCast(String projection)
     {
-        try {
-            evaluateInvalid(projection);
-            fail("Expected to throw an INVALID_CAST_ARGUMENT exception");
-        }
-        catch (PrestoException e) {
-            assertEquals(e.getErrorCode(), INVALID_CAST_ARGUMENT.toErrorCode());
-        }
+        functionAssertions.assertInvalidCast(projection);
     }
 
     protected void assertInvalidCast(String projection, String message)
     {
-        try {
-            evaluateInvalid(projection);
-            fail("Expected to throw an INVALID_CAST_ARGUMENT exception");
-        }
-        catch (PrestoException e) {
-            assertEquals(e.getErrorCode(), INVALID_CAST_ARGUMENT.toErrorCode());
-            assertEquals(e.getMessage(), message);
-        }
+        functionAssertions.assertInvalidCast(projection, message);
     }
 
     public void assertCachedInstanceHasBoundedRetainedSize(String projection)
@@ -213,8 +167,14 @@ public abstract class AbstractTestFunctions
             fail("expected exception");
         }
         catch (PrestoException e) {
-            assertEquals(e.getErrorCode(), NOT_SUPPORTED.toErrorCode());
-            assertEquals(e.getMessage(), message);
+            try {
+                assertEquals(e.getErrorCode(), NOT_SUPPORTED.toErrorCode());
+                assertEquals(e.getMessage(), message);
+            }
+            catch (Throwable failure) {
+                failure.addSuppressed(e);
+                throw failure;
+            }
         }
     }
 
@@ -226,25 +186,37 @@ public abstract class AbstractTestFunctions
     protected void registerScalarFunction(SqlScalarFunction sqlScalarFunction)
     {
         Metadata metadata = functionAssertions.getMetadata();
-        metadata.getFunctionRegistry().addFunctions(ImmutableList.of(sqlScalarFunction));
+        metadata.getFunctionManager().registerBuiltInFunctions(ImmutableList.of(sqlScalarFunction));
     }
 
     protected void registerScalar(Class<?> clazz)
     {
         Metadata metadata = functionAssertions.getMetadata();
-        List<SqlFunction> functions = new FunctionListBuilder()
+        List<BuiltInFunction> functions = new FunctionListBuilder()
                 .scalars(clazz)
                 .getFunctions();
-        metadata.getFunctionRegistry().addFunctions(functions);
+        metadata.getFunctionManager().registerBuiltInFunctions(functions);
     }
 
     protected void registerParametricScalar(Class<?> clazz)
     {
         Metadata metadata = functionAssertions.getMetadata();
-        List<SqlFunction> functions = new FunctionListBuilder()
+        List<BuiltInFunction> functions = new FunctionListBuilder()
                 .scalar(clazz)
                 .getFunctions();
-        metadata.getFunctionRegistry().addFunctions(functions);
+        metadata.getFunctionManager().registerBuiltInFunctions(functions);
+    }
+
+    protected void registerFunctions(Plugin plugin)
+    {
+        functionAssertions.getMetadata().registerBuiltInFunctions(extractFunctions(plugin.getFunctions()));
+    }
+
+    protected void registerTypes(Plugin plugin)
+    {
+        for (Type type : plugin.getTypes()) {
+            functionAssertions.getTypeRegistry().addType(type);
+        }
     }
 
     protected static SqlDecimal decimal(String decimalString)
@@ -280,11 +252,5 @@ public abstract class AbstractTestFunctions
             }
         }
         return map;
-    }
-
-    private void evaluateInvalid(String projection)
-    {
-        // type isn't necessary as the function is not valid
-        functionAssertions.assertFunction(projection, UNKNOWN, null);
     }
 }

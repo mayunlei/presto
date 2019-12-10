@@ -22,12 +22,13 @@ import org.testng.annotations.Test;
 import java.io.IOException;
 import java.util.Optional;
 
+import static com.facebook.presto.sql.parser.ParsingOptions.DecimalLiteralTreatment.AS_DOUBLE;
 import static com.facebook.presto.sql.testing.TreeAssertions.assertFormattedSql;
 import static com.google.common.base.Strings.repeat;
 import static java.lang.String.format;
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
-import static org.testng.Assert.assertTrue;
 
 public class TestStatementBuilder
 {
@@ -35,7 +36,6 @@ public class TestStatementBuilder
 
     @Test
     public void testStatementBuilder()
-            throws Exception
     {
         printStatement("select * from foo");
         printStatement("explain select * from foo");
@@ -94,6 +94,8 @@ public class TestStatementBuilder
                 ", sum(salary) over (partition by depname order by salary rows between current row and 3 following)\n" +
                 ", sum(salary) over (partition by depname range unbounded preceding)\n" +
                 ", sum(salary) over (rows between 2 preceding and unbounded following)\n" +
+                ", lag(salary, 1) ignore nulls over (partition by depname)\n" +
+                ", lag(salary, 1) respect nulls over (partition by depname)\n" +
                 "from emp");
 
         printStatement("" +
@@ -114,14 +116,6 @@ public class TestStatementBuilder
         printStatement("show tables from information_schema");
         printStatement("show tables like '%'");
         printStatement("show tables from information_schema like '%'");
-
-        printStatement("show partitions from foo");
-        printStatement("show partitions from foo where name = 'foo'");
-        printStatement("show partitions from foo order by x");
-        printStatement("show partitions from foo limit 10");
-        printStatement("show partitions from foo limit all");
-        printStatement("show partitions from foo order by x desc limit 10");
-        printStatement("show partitions from foo order by x desc limit all");
 
         printStatement("show functions");
 
@@ -193,6 +187,10 @@ public class TestStatementBuilder
 
         printStatement("alter table a.b.c add column x bigint");
 
+        printStatement("alter table a.b.c add column x bigint comment 'large x'");
+        printStatement("alter table a.b.c add column x bigint with (weight = 2)");
+        printStatement("alter table a.b.c add column x bigint comment 'xtra' with (compression = 'LZ4', special = true)");
+
         printStatement("alter table a.b.c drop column x");
 
         printStatement("create schema test");
@@ -212,6 +210,7 @@ public class TestStatementBuilder
         printStatement("create table if not exists baz (a timestamp, b varchar)");
         printStatement("create table test (a boolean, b bigint) with (a = 'apple', b = 'banana')");
         printStatement("create table test (a boolean, b bigint) comment 'test' with (a = 'apple')");
+        printStatement("create table test (a boolean with (a = 'apple', b = 'banana'), b bigint comment 'bla' with (c = 'cherry')) comment 'test' with (a = 'apple')");
         printStatement("drop table test");
 
         printStatement("create view foo as with a as (select 123) select * from a");
@@ -242,13 +241,19 @@ public class TestStatementBuilder
 
         printStatement("grant select on foo to alice with grant option");
         printStatement("grant all privileges on foo to alice");
-        printStatement("grant delete, select on foo to public");
+        printStatement("grant delete, select on foo to role public");
         printStatement("revoke grant option for select on foo from alice");
         printStatement("revoke all privileges on foo from alice");
-        printStatement("revoke insert, delete on foo from public"); //check support for public
+        printStatement("revoke insert, delete on foo from role public");
         printStatement("show grants on table t");
         printStatement("show grants on t");
         printStatement("show grants");
+        printStatement("show roles");
+        printStatement("show roles from foo");
+        printStatement("show current roles");
+        printStatement("show current roles from foo");
+        printStatement("show role grants");
+        printStatement("show role grants from foo");
 
         printStatement("prepare p from select * from (select * from T) \"A B\"");
 
@@ -259,7 +264,6 @@ public class TestStatementBuilder
 
     @Test
     public void testStringFormatter()
-            throws Exception
     {
         assertSqlFormatter("U&'hello\\6d4B\\8Bd5\\+10FFFFworld\\7F16\\7801'",
                 "U&'hello\\6D4B\\8BD5\\+10FFFFworld\\7F16\\7801'");
@@ -309,7 +313,8 @@ public class TestStatementBuilder
         println(sql.trim());
         println("");
 
-        Statement statement = SQL_PARSER.createStatement(sql);
+        ParsingOptions parsingOptions = new ParsingOptions(AS_DOUBLE /* anything */);
+        Statement statement = SQL_PARSER.createStatement(sql, parsingOptions);
         println(statement.toString());
         println("");
 
@@ -323,9 +328,9 @@ public class TestStatementBuilder
 
     private static void assertSqlFormatter(String expression, String formatted)
     {
-        Expression originalExpression = SQL_PARSER.createExpression(expression);
+        Expression originalExpression = SQL_PARSER.createExpression(expression, new ParsingOptions());
         String real = SqlFormatter.formatSql(originalExpression, Optional.empty());
-        assertTrue(real.equals(formatted));
+        assertEquals(real, formatted);
     }
 
     private static void println(String s)

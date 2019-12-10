@@ -25,21 +25,25 @@ public class ReaderAttributes
 {
     private final DataSize maxMergeDistance;
     private final DataSize maxReadSize;
+    private final DataSize tinyStripeThreshold;
     private final DataSize streamBufferSize;
     private final boolean lazyReadSmallRanges;
+    private final boolean zstdJniDecompressionEnabled;
 
     @Inject
     public ReaderAttributes(StorageManagerConfig config)
     {
-        this(config.getOrcMaxMergeDistance(), config.getOrcMaxReadSize(), config.getOrcStreamBufferSize(), config.isOrcLazyReadSmallRanges());
+        this(config.getOrcMaxMergeDistance(), config.getOrcMaxReadSize(), config.getOrcStreamBufferSize(), config.getOrcTinyStripeThreshold(), config.isOrcLazyReadSmallRanges(), config.isZstdJniDecompressionEnabled());
     }
 
-    public ReaderAttributes(DataSize maxMergeDistance, DataSize maxReadSize, DataSize streamBufferSize, boolean lazyReadSmallRanges)
+    public ReaderAttributes(DataSize maxMergeDistance, DataSize maxReadSize, DataSize streamBufferSize, DataSize tinyStripeThreshold, boolean lazyReadSmallRanges, boolean zstdJniDecompressionEnabled)
     {
         this.maxMergeDistance = requireNonNull(maxMergeDistance, "maxMergeDistance is null");
         this.maxReadSize = requireNonNull(maxReadSize, "maxReadSize is null");
+        this.tinyStripeThreshold = requireNonNull(tinyStripeThreshold, "tinyStripeThreshold is null");
         this.streamBufferSize = requireNonNull(streamBufferSize, "streamBufferSize is null");
         this.lazyReadSmallRanges = lazyReadSmallRanges;
+        this.zstdJniDecompressionEnabled = zstdJniDecompressionEnabled;
     }
 
     public DataSize getMaxMergeDistance()
@@ -57,9 +61,19 @@ public class ReaderAttributes
         return streamBufferSize;
     }
 
+    public DataSize getTinyStripeThreshold()
+    {
+        return tinyStripeThreshold;
+    }
+
     public boolean isLazyReadSmallRanges()
     {
         return lazyReadSmallRanges;
+    }
+
+    public boolean isZstdJniDecompressionEnabled()
+    {
+        return zstdJniDecompressionEnabled;
     }
 
     public static ReaderAttributes from(ConnectorSession session)
@@ -68,6 +82,8 @@ public class ReaderAttributes
                 RaptorSessionProperties.getReaderMaxMergeDistance(session),
                 RaptorSessionProperties.getReaderMaxReadSize(session),
                 RaptorSessionProperties.getReaderStreamBufferSize(session),
-                RaptorSessionProperties.isReaderLazyReadSmallRanges(session));
+                RaptorSessionProperties.getReaderTinyStripeThreshold(session),
+                RaptorSessionProperties.isReaderLazyReadSmallRanges(session),
+                RaptorSessionProperties.isZstdJniDecompressionEnabled(session));
     }
 }

@@ -13,14 +13,14 @@
  */
 package com.facebook.presto.metadata;
 
+import com.facebook.airlift.http.client.FullJsonResponseHandler.JsonResponse;
+import com.facebook.airlift.http.client.HttpClient;
+import com.facebook.airlift.http.client.HttpClient.HttpResponseFuture;
+import com.facebook.airlift.http.client.Request;
+import com.facebook.airlift.log.Logger;
 import com.facebook.presto.spi.NodeState;
 import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
-import io.airlift.http.client.FullJsonResponseHandler.JsonResponse;
-import io.airlift.http.client.HttpClient;
-import io.airlift.http.client.HttpClient.HttpResponseFuture;
-import io.airlift.http.client.Request;
-import io.airlift.log.Logger;
 import io.airlift.units.Duration;
 
 import javax.annotation.Nullable;
@@ -32,15 +32,14 @@ import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static com.facebook.airlift.http.client.FullJsonResponseHandler.createFullJsonResponseHandler;
+import static com.facebook.airlift.http.client.HttpStatus.OK;
+import static com.facebook.airlift.http.client.Request.Builder.prepareGet;
+import static com.facebook.airlift.json.JsonCodec.jsonCodec;
 import static com.google.common.net.MediaType.JSON_UTF_8;
-import static io.airlift.http.client.FullJsonResponseHandler.createFullJsonResponseHandler;
-import static io.airlift.http.client.HttpStatus.OK;
-import static io.airlift.http.client.Request.Builder.prepareGet;
-import static io.airlift.json.JsonCodec.jsonCodec;
+import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static io.airlift.units.Duration.nanosSince;
 import static java.util.Objects.requireNonNull;
-import static java.util.Optional.empty;
-import static java.util.Optional.ofNullable;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static javax.ws.rs.core.HttpHeaders.CONTENT_TYPE;
 
@@ -51,7 +50,7 @@ public class RemoteNodeState
 
     private final HttpClient httpClient;
     private final URI stateInfoUri;
-    private final AtomicReference<Optional<NodeState>> nodeState = new AtomicReference<>(empty());
+    private final AtomicReference<Optional<NodeState>> nodeState = new AtomicReference<>(Optional.empty());
     private final AtomicReference<Future<?>> future = new AtomicReference<>();
     private final AtomicLong lastUpdateNanos = new AtomicLong();
     private final AtomicLong lastWarningLogged = new AtomicLong();
@@ -93,7 +92,7 @@ public class RemoteNodeState
                     future.compareAndSet(responseFuture, null);
                     if (result != null) {
                         if (result.hasValue()) {
-                            nodeState.set(ofNullable(result.getValue()));
+                            nodeState.set(Optional.ofNullable(result.getValue()));
                         }
                         if (result.getStatusCode() != OK.code()) {
                             log.warn("Error fetching node state from %s returned status %d: %s", stateInfoUri, result.getStatusCode(), result.getStatusMessage());
@@ -109,7 +108,7 @@ public class RemoteNodeState
                     lastUpdateNanos.set(System.nanoTime());
                     future.compareAndSet(responseFuture, null);
                 }
-            });
+            }, directExecutor());
         }
     }
 }

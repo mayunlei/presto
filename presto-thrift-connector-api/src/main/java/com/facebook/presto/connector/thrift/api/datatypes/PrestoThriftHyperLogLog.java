@@ -13,21 +13,21 @@
  */
 package com.facebook.presto.connector.thrift.api.datatypes;
 
+import com.facebook.drift.annotations.ThriftConstructor;
+import com.facebook.drift.annotations.ThriftField;
+import com.facebook.drift.annotations.ThriftStruct;
 import com.facebook.presto.connector.thrift.api.PrestoThriftBlock;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.type.Type;
-import com.facebook.swift.codec.ThriftConstructor;
-import com.facebook.swift.codec.ThriftField;
-import com.facebook.swift.codec.ThriftStruct;
 
 import javax.annotation.Nullable;
 
 import java.util.Objects;
 
+import static com.facebook.drift.annotations.ThriftField.Requiredness.OPTIONAL;
 import static com.facebook.presto.connector.thrift.api.PrestoThriftBlock.hyperLogLogData;
 import static com.facebook.presto.connector.thrift.api.datatypes.SliceData.fromSliceBasedBlock;
 import static com.facebook.presto.spi.type.HyperLogLogType.HYPER_LOG_LOG;
-import static com.facebook.swift.codec.ThriftField.Requiredness.OPTIONAL;
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
 

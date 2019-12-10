@@ -1,4 +1,4 @@
--- database: presto_tpcds; groups: tpcds; requires: com.teradata.tempto.fulfillment.table.hive.tpcds.ImmutableTpcdsTablesRequirements
+-- database: presto_tpcds; groups: tpcds; requires: io.prestodb.tempto.fulfillment.table.hive.tpcds.ImmutableTpcdsTablesRequirements
 WITH
   ssales AS (
    SELECT
@@ -37,7 +37,7 @@ SELECT
 , "sum"("netpaid") "paid"
 FROM
   ssales
-WHERE ("i_color" = 'chiffon             ')
+WHERE ("i_color" = 'chiffon')
 GROUP BY "c_last_name", "c_first_name", "s_store_name"
 HAVING ("sum"("netpaid") > (
       SELECT (DECIMAL '0.05' * "avg"("netpaid"))

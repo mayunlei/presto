@@ -14,7 +14,7 @@
 package com.facebook.presto.raptor.storage;
 
 import com.facebook.presto.client.NodeVersion;
-import com.facebook.presto.metadata.PrestoNode;
+import com.facebook.presto.metadata.InternalNode;
 import com.facebook.presto.raptor.NodeSupplier;
 import com.facebook.presto.raptor.metadata.BucketNode;
 import com.facebook.presto.raptor.metadata.ColumnInfo;
@@ -42,13 +42,13 @@ import java.util.List;
 import java.util.OptionalLong;
 import java.util.stream.Collectors;
 
+import static com.facebook.airlift.testing.Assertions.assertGreaterThanOrEqual;
+import static com.facebook.airlift.testing.Assertions.assertLessThanOrEqual;
 import static com.facebook.presto.raptor.metadata.Distribution.serializeColumnTypes;
 import static com.facebook.presto.raptor.metadata.SchemaDaoUtil.createTablesWithRetry;
 import static com.facebook.presto.raptor.metadata.TestDatabaseShardManager.createShardManager;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.google.common.base.Preconditions.checkArgument;
-import static io.airlift.testing.Assertions.assertGreaterThanOrEqual;
-import static io.airlift.testing.Assertions.assertLessThanOrEqual;
 import static java.util.concurrent.TimeUnit.DAYS;
 import static org.testng.Assert.assertEquals;
 
@@ -66,7 +66,6 @@ public class TestBucketBalancer
 
     @BeforeMethod
     public void setup()
-            throws Exception
     {
         TypeRegistry typeRegistry = new TypeRegistry();
         dbi = new DBI("jdbc:h2:mem:test" + System.nanoTime());
@@ -81,7 +80,7 @@ public class TestBucketBalancer
 
         NodeSupplier nodeSupplier = nodeManager::getWorkerNodes;
         shardManager = createShardManager(dbi, nodeSupplier);
-        balancer = new BucketBalancer(nodeSupplier, shardManager, true, new Duration(1, DAYS), true, true, "test");
+        balancer = new BucketBalancer(nodeSupplier, shardManager, true, new Duration(1, DAYS), 0, true, true, "test");
     }
 
     @AfterMethod(alwaysRun = true)
@@ -94,7 +93,6 @@ public class TestBucketBalancer
 
     @Test
     public void testSingleDistributionUnbalanced()
-            throws Exception
     {
         long distributionId = createDistribution("distA", 16);
         createBucketedTable("testA", distributionId);
@@ -107,7 +105,6 @@ public class TestBucketBalancer
 
     @Test
     public void testSingleDistributionSlightlyUnbalanced()
-            throws Exception
     {
         long distributionId = createDistribution("distA", 16);
         createBucketedTable("testA", distributionId);
@@ -120,7 +117,6 @@ public class TestBucketBalancer
 
     @Test
     public void testSingleDistributionBalanced()
-            throws Exception
     {
         long distributionId = createDistribution("distA", 16);
         createBucketedTable("testA", distributionId);
@@ -133,7 +129,6 @@ public class TestBucketBalancer
 
     @Test
     public void testSingleDistributionUnbalancedWithDeadNode()
-            throws Exception
     {
         long distributionId = createDistribution("distA", 16);
         createBucketedTable("testA", distributionId);
@@ -147,7 +142,6 @@ public class TestBucketBalancer
 
     @Test
     public void testSingleDistributionUnbalancedWithNewNode()
-            throws Exception
     {
         long distributionId = createDistribution("distA", 16);
         createBucketedTable("testA", distributionId);
@@ -161,7 +155,6 @@ public class TestBucketBalancer
 
     @Test
     public void testMultipleDistributionUnbalanced()
-            throws Exception
     {
         long distributionA = createDistribution("distA", 17);
         createBucketedTable("testA", distributionA);
@@ -180,7 +173,6 @@ public class TestBucketBalancer
 
     @Test
     public void testMultipleDistributionUnbalancedWithDiskSpace()
-            throws Exception
     {
         long distributionA = createDistribution("distA", 4);
         createBucketedTable("testA", distributionA, DataSize.valueOf("4B"));
@@ -204,7 +196,6 @@ public class TestBucketBalancer
 
     @Test
     public void testMultipleDistributionUnbalancedWithDiskSpace2()
-            throws Exception
     {
         long distributionA = createDistribution("distA", 4);
         createBucketedTable("testA", distributionA, DataSize.valueOf("4B"));
@@ -219,7 +210,6 @@ public class TestBucketBalancer
 
     @Test
     public void testMultipleDistributionUnbalancedWorstCase()
-            throws Exception
     {
         // we will end up with only one bucket on node1
         long distributionA = createDistribution("distA", 4);
@@ -285,9 +275,9 @@ public class TestBucketBalancer
     private long createBucketedTable(String tableName, long distributionId, DataSize compressedSize)
     {
         MetadataDao dao = dbi.onDemand(MetadataDao.class);
-        long tableId = dao.insertTable("test", tableName, false, false, distributionId, 0);
+        long tableId = dao.insertTable("test", tableName, false, false, distributionId, 0, false);
         List<ColumnInfo> columnsA = ImmutableList.of(new ColumnInfo(1, BIGINT));
-        shardManager.createTable(tableId, columnsA, false, OptionalLong.empty());
+        shardManager.createTable(tableId, columnsA, false, OptionalLong.empty(), false);
 
         metadataDao.updateTableStats(tableId, 1024, 1024 * 1024 * 1024, compressedSize.toBytes(), compressedSize.toBytes() * 2);
         return tableId;
@@ -316,6 +306,6 @@ public class TestBucketBalancer
 
     private static Node createTestingNode(String nodeIdentifier)
     {
-        return new PrestoNode(nodeIdentifier, URI.create("http://test"), NodeVersion.UNKNOWN, false);
+        return new InternalNode(nodeIdentifier, URI.create("http://test"), NodeVersion.UNKNOWN, false);
     }
 }

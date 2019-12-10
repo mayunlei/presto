@@ -31,14 +31,14 @@ import static com.facebook.presto.bytecode.Access.PRIVATE;
 import static com.facebook.presto.bytecode.Access.PUBLIC;
 import static com.facebook.presto.bytecode.Access.STATIC;
 import static com.facebook.presto.bytecode.Access.a;
-import static com.facebook.presto.bytecode.CompilerUtils.defineClass;
-import static com.facebook.presto.bytecode.CompilerUtils.makeClassName;
 import static com.facebook.presto.bytecode.Parameter.arg;
 import static com.facebook.presto.bytecode.ParameterizedType.type;
 import static com.facebook.presto.bytecode.expression.BytecodeExpressions.newArray;
 import static com.facebook.presto.bytecode.expression.BytecodeExpressions.newInstance;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
 import static com.facebook.presto.sql.gen.BytecodeUtils.loadConstant;
+import static com.facebook.presto.util.CompilerUtils.defineClass;
+import static com.facebook.presto.util.CompilerUtils.makeClassName;
 import static com.facebook.presto.util.Failures.checkCondition;
 import static com.google.common.base.Preconditions.checkArgument;
 import static java.util.Collections.nCopies;
@@ -78,12 +78,12 @@ public class VarArgsToArrayAdapterGenerator
         /**
          * User state created by provided user state factory
          */
-        public Object userState;
+        public final Object userState;
 
         /**
          * Array of argument, such as long[], Block[]
          */
-        public Object args;
+        public final Object args;
 
         public VarArgsToArrayAdapterState(Object userState, Object args)
         {

@@ -1,4 +1,4 @@
--- database: presto_tpcds; groups: tpcds; requires: com.teradata.tempto.fulfillment.table.hive.tpcds.ImmutableTpcdsTablesRequirements
+-- database: presto_tpcds; groups: tpcds; requires: io.prestodb.tempto.fulfillment.table.hive.tpcds.ImmutableTpcdsTablesRequirements
 SELECT
   "i_brand_id" "brand_id"
 , "i_brand" "brand"
@@ -46,7 +46,7 @@ UNION ALL    SELECT
 WHERE ("sold_item_sk" = "i_item_sk")
    AND ("i_manager_id" = 1)
    AND ("time_sk" = "t_time_sk")
-   AND (("t_meal_time" = 'breakfast           ')
-      OR ("t_meal_time" = 'dinner              '))
+   AND (("t_meal_time" = 'breakfast')
+      OR ("t_meal_time" = 'dinner'))
 GROUP BY "i_brand", "i_brand_id", "t_hour", "t_minute"
 ORDER BY "ext_price" DESC, "i_brand_id" ASC

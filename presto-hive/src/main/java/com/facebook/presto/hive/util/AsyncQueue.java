@@ -30,6 +30,7 @@ import java.util.function.Function;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.util.concurrent.Futures.immediateFuture;
+import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static java.util.Objects.requireNonNull;
 
 @ThreadSafe
@@ -38,7 +39,7 @@ public class AsyncQueue<T>
     private final int targetQueueSize;
 
     @GuardedBy("this")
-    private final Queue<T> elements;
+    private Queue<T> elements;
     // This future is completed when the queue transitions from full to not. But it will be replaced by a new instance of future immediately.
     @GuardedBy("this")
     private SettableFuture<?> notFullSignal = SettableFuture.create();
@@ -46,9 +47,9 @@ public class AsyncQueue<T>
     @GuardedBy("this")
     private SettableFuture<?> notEmptySignal = SettableFuture.create();
     @GuardedBy("this")
-    private boolean finishing = false;
+    private boolean finishing;
     @GuardedBy("this")
-    private int borrowerCount = 0;
+    private int borrowerCount;
 
     private final Executor executor;
 
@@ -83,6 +84,8 @@ public class AsyncQueue<T>
     {
         if (finishing && borrowerCount == 0) {
             if (elements.size() == 0) {
+                // Reset elements queue after finishing to avoid holding on to the full sized empty array inside
+                elements = new ArrayDeque<>(0);
                 completeAsync(executor, notEmptySignal);
                 notEmptySignal = SettableFuture.create();
             }
@@ -204,7 +207,7 @@ public class AsyncQueue<T>
                             }
                         }
                     }
-                });
+                }, directExecutor());
     }
 
     private static void completeAsync(Executor executor, SettableFuture<?> future)

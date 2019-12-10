@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.raptor.metadata;
 
+import com.facebook.airlift.log.Logger;
 import com.facebook.presto.raptor.NodeSupplier;
 import com.facebook.presto.raptor.RaptorColumnHandle;
 import com.facebook.presto.raptor.storage.organization.ShardOrganizerDao;
@@ -22,19 +23,15 @@ import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.type.Type;
 import com.google.common.base.Joiner;
-import com.google.common.base.Throwables;
 import com.google.common.base.Ticker;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
-import com.google.common.util.concurrent.ExecutionError;
 import com.google.common.util.concurrent.UncheckedExecutionException;
-import io.airlift.log.Logger;
 import io.airlift.units.Duration;
 import org.h2.jdbc.JdbcConnection;
 import org.skife.jdbi.v2.Handle;
@@ -84,6 +81,7 @@ import static com.facebook.presto.spi.StandardErrorCode.SERVER_STARTING_UP;
 import static com.facebook.presto.spi.StandardErrorCode.TRANSACTION_CONFLICT;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Throwables.throwIfInstanceOf;
+import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.Iterables.partition;
 import static java.lang.Boolean.TRUE;
 import static java.lang.Math.multiplyExact;
@@ -118,7 +116,7 @@ public class DatabaseShardManager
             .maximumSize(10_000)
             .build(CacheLoader.from(this::loadNodeId));
 
-    private final LoadingCache<Long, Map<Integer, String>> bucketAssignmentsCache = CacheBuilder.newBuilder()
+    private final LoadingCache<Long, List<String>> bucketAssignmentsCache = CacheBuilder.newBuilder()
             .expireAfterWrite(1, SECONDS)
             .build(CacheLoader.from(this::loadBucketAssignments));
 
@@ -153,7 +151,7 @@ public class DatabaseShardManager
     }
 
     @Override
-    public void createTable(long tableId, List<ColumnInfo> columns, boolean bucketed, OptionalLong temporalColumnId)
+    public void createTable(long tableId, List<ColumnInfo> columns, boolean bucketed, OptionalLong temporalColumnId, boolean tableSupportsDeltaDelete)
     {
         StringJoiner tableColumns = new StringJoiner(",\n  ", "  ", ",\n").setEmptyValue("");
 
@@ -171,43 +169,27 @@ public class DatabaseShardManager
         temporalColumnId.ifPresent(id -> coveringIndexColumns.add(maxColumn(id)));
         temporalColumnId.ifPresent(id -> coveringIndexColumns.add(minColumn(id)));
 
-        String sql;
         if (bucketed) {
-            coveringIndexColumns
-                    .add("bucket_number")
-                    .add("shard_id")
-                    .add("shard_uuid");
-
-            sql = "" +
-                    "CREATE TABLE " + shardIndexTable(tableId) + " (\n" +
-                    "  shard_id BIGINT NOT NULL,\n" +
-                    "  shard_uuid BINARY(16) NOT NULL,\n" +
-                    "  bucket_number INT NOT NULL\n," +
-                    tableColumns +
-                    "  PRIMARY KEY (bucket_number, shard_uuid),\n" +
-                    "  UNIQUE (shard_id),\n" +
-                    "  UNIQUE (shard_uuid),\n" +
-                    "  UNIQUE (" + coveringIndexColumns + ")\n" +
-                    ")";
+            coveringIndexColumns.add("bucket_number");
         }
         else {
-            coveringIndexColumns
-                    .add("node_ids")
-                    .add("shard_id")
-                    .add("shard_uuid");
-
-            sql = "" +
-                    "CREATE TABLE " + shardIndexTable(tableId) + " (\n" +
-                    "  shard_id BIGINT NOT NULL,\n" +
-                    "  shard_uuid BINARY(16) NOT NULL,\n" +
-                    "  node_ids VARBINARY(128) NOT NULL,\n" +
-                    tableColumns +
-                    "  PRIMARY KEY (node_ids, shard_uuid),\n" +
-                    "  UNIQUE (shard_id),\n" +
-                    "  UNIQUE (shard_uuid),\n" +
-                    "  UNIQUE (" + coveringIndexColumns + ")\n" +
-                    ")";
+            coveringIndexColumns.add("node_ids");
         }
+        coveringIndexColumns
+                .add("shard_id")
+                .add("shard_uuid");
+        String sql = "" +
+                "CREATE TABLE " + shardIndexTable(tableId) + " (\n" +
+                "  shard_id BIGINT NOT NULL,\n" +
+                "  shard_uuid BINARY(16) NOT NULL,\n" +
+                (tableSupportsDeltaDelete ? "  delta_shard_uuid BINARY(16) DEFAULT NULL,\n" : "") +
+                (bucketed ? "  bucket_number INT NOT NULL\n," : "  node_ids VARBINARY(128) NOT NULL,\n") +
+                tableColumns +
+                (bucketed ? "  PRIMARY KEY (bucket_number, shard_uuid),\n" : "  PRIMARY KEY (node_ids, shard_uuid),\n") +
+                "  UNIQUE (shard_id),\n" +
+                "  UNIQUE (shard_uuid),\n" +
+                "  UNIQUE (" + coveringIndexColumns + ")\n" +
+                ")";
 
         try (Handle handle = dbi.open()) {
             handle.execute(sql);
@@ -545,13 +527,13 @@ public class DatabaseShardManager
     }
 
     @Override
-    public ResultIterator<BucketShards> getShardNodesBucketed(long tableId, boolean merged, Map<Integer, String> bucketToNode, TupleDomain<RaptorColumnHandle> effectivePredicate)
+    public ResultIterator<BucketShards> getShardNodesBucketed(long tableId, boolean merged, List<String> bucketToNode, TupleDomain<RaptorColumnHandle> effectivePredicate)
     {
         return new ShardIterator(tableId, merged, Optional.of(bucketToNode), effectivePredicate, dbi);
     }
 
     @Override
-    public void assignShard(long tableId, UUID shardUuid, String nodeIdentifier, boolean gracePeriod)
+    public void replaceShardAssignment(long tableId, UUID shardUuid, String nodeIdentifier, boolean gracePeriod)
     {
         if (gracePeriod && (nanosSince(startTime).compareTo(startupGracePeriod) < 0)) {
             throw new PrestoException(SERVER_STARTING_UP, "Cannot reassign shards while server is starting");
@@ -562,30 +544,11 @@ public class DatabaseShardManager
         runTransaction(dbi, (handle, status) -> {
             ShardDao dao = shardDaoSupplier.attach(handle);
 
-            Set<Integer> nodes = new HashSet<>(fetchLockedNodeIds(handle, tableId, shardUuid));
-            if (nodes.add(nodeId)) {
-                updateNodeIds(handle, tableId, shardUuid, nodes);
-                dao.insertShardNode(shardUuid, nodeId);
-            }
+            Set<Integer> oldAssignments = new HashSet<>(fetchLockedNodeIds(handle, tableId, shardUuid));
+            updateNodeIds(handle, tableId, shardUuid, ImmutableSet.of(nodeId));
 
-            return null;
-        });
-    }
-
-    @Override
-    public void unassignShard(long tableId, UUID shardUuid, String nodeIdentifier)
-    {
-        int nodeId = getOrCreateNodeId(nodeIdentifier);
-
-        runTransaction(dbi, (handle, status) -> {
-            ShardDao dao = shardDaoSupplier.attach(handle);
-
-            Set<Integer> nodes = new HashSet<>(fetchLockedNodeIds(handle, tableId, shardUuid));
-            if (nodes.remove(nodeId)) {
-                updateNodeIds(handle, tableId, shardUuid, nodes);
-                dao.deleteShardNode(shardUuid, nodeId);
-            }
-
+            dao.deleteShardNodes(shardUuid, oldAssignments);
+            dao.insertShardNode(shardUuid, nodeId);
             return null;
         });
     }
@@ -625,13 +588,14 @@ public class DatabaseShardManager
     }
 
     @Override
-    public Map<Integer, String> getBucketAssignments(long distributionId)
+    public List<String> getBucketAssignments(long distributionId)
     {
         try {
             return bucketAssignmentsCache.getUnchecked(distributionId);
         }
-        catch (UncheckedExecutionException | ExecutionError e) {
-            throw Throwables.propagate(e.getCause());
+        catch (UncheckedExecutionException e) {
+            throwIfInstanceOf(e.getCause(), PrestoException.class);
+            throw e;
         }
     }
 
@@ -680,7 +644,7 @@ public class DatabaseShardManager
             return existingShards.build();
         }
         catch (SQLException e) {
-            throw Throwables.propagate(e);
+            throw new RuntimeException(e);
         }
     }
 
@@ -689,14 +653,17 @@ public class DatabaseShardManager
         return dao.getBucketNodes(distributionId);
     }
 
-    private Map<Integer, String> loadBucketAssignments(long distributionId)
+    private List<String> loadBucketAssignments(long distributionId)
     {
         Set<String> nodeIds = getNodeIdentifiers();
-        Iterator<String> nodeIterator = cyclingShuffledIterator(nodeIds);
+        List<BucketNode> bucketNodes = getBuckets(distributionId);
+        BucketReassigner reassigner = new BucketReassigner(nodeIds, bucketNodes);
 
-        ImmutableMap.Builder<Integer, String> assignments = ImmutableMap.builder();
+        List<String> assignments = new ArrayList<>(nCopies(bucketNodes.size(), null));
+        PrestoException limiterException = null;
+        Set<String> offlineNodes = new HashSet<>();
 
-        for (BucketNode bucketNode : getBuckets(distributionId)) {
+        for (BucketNode bucketNode : bucketNodes) {
             int bucket = bucketNode.getBucketNumber();
             String nodeId = bucketNode.getNodeIdentifier();
 
@@ -704,19 +671,33 @@ public class DatabaseShardManager
                 if (nanosSince(startTime).compareTo(startupGracePeriod) < 0) {
                     throw new PrestoException(SERVER_STARTING_UP, "Cannot reassign buckets while server is starting");
                 }
-                assignmentLimiter.checkAssignFrom(nodeId);
+
+                try {
+                    if (offlineNodes.add(nodeId)) {
+                        assignmentLimiter.checkAssignFrom(nodeId);
+                    }
+                }
+                catch (PrestoException e) {
+                    if (limiterException == null) {
+                        limiterException = e;
+                    }
+                    continue;
+                }
 
                 String oldNodeId = nodeId;
-                // TODO: use smarter system to choose replacement node
-                nodeId = nodeIterator.next();
+                nodeId = reassigner.getNextReassignmentDestination();
                 dao.updateBucketNode(distributionId, bucket, getOrCreateNodeId(nodeId));
                 log.info("Reassigned bucket %s for distribution ID %s from %s to %s", bucket, distributionId, oldNodeId, nodeId);
             }
 
-            assignments.put(bucket, nodeId);
+            verify(assignments.set(bucket, nodeId) == null, "Duplicate bucket");
         }
 
-        return assignments.build();
+        if (limiterException != null) {
+            throw limiterException;
+        }
+
+        return ImmutableList.copyOf(assignments);
     }
 
     private Set<String> getNodeIdentifiers()
@@ -735,8 +716,9 @@ public class DatabaseShardManager
         try {
             return nodeIdCache.getUnchecked(nodeIdentifier);
         }
-        catch (UncheckedExecutionException | ExecutionError e) {
-            throw Throwables.propagate(e.getCause());
+        catch (UncheckedExecutionException e) {
+            throwIfInstanceOf(e.getCause(), PrestoException.class);
+            throw e;
         }
     }
 

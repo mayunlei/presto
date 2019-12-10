@@ -44,7 +44,6 @@ public class TestChars
 
     @Test
     public void testByteCountWithoutTrailingSpaces()
-            throws Exception
     {
         // single byte code points
         assertByteCountWithoutTrailingSpace("abc def ", 1, 0, "");
@@ -67,14 +66,13 @@ public class TestChars
         assertByteCountWithoutTrailingSpace("       ", 0, 0, "");
 
         // invalid code points
-        assertByteCountWithoutTrailingSpace(new byte[]{(byte) 0x81, (byte) 0x81, (byte) 0x81}, 0, 2, new byte[]{(byte) 0x81, (byte) 0x81});
-        assertByteCountWithoutTrailingSpace(new byte[]{(byte) 0x81, (byte) 0x81, (byte) 0x81}, 0, 1, new byte[]{(byte) 0x81});
-        assertByteCountWithoutTrailingSpace(new byte[]{(byte) 0x81, (byte) 0x81, (byte) 0x81}, 0, 0, new byte[]{});
+        assertByteCountWithoutTrailingSpace(new byte[] {(byte) 0x81, (byte) 0x81, (byte) 0x81}, 0, 2, new byte[] {(byte) 0x81, (byte) 0x81});
+        assertByteCountWithoutTrailingSpace(new byte[] {(byte) 0x81, (byte) 0x81, (byte) 0x81}, 0, 1, new byte[] {(byte) 0x81});
+        assertByteCountWithoutTrailingSpace(new byte[] {(byte) 0x81, (byte) 0x81, (byte) 0x81}, 0, 0, new byte[] {});
     }
 
     @Test
     public void testByteCountWithoutTrailingSpacesWithCodePointLimit()
-            throws Exception
     {
         // single byte code points
         assertByteCountWithoutTrailingSpace("abc def ", 1, 0, 1, "");
@@ -84,9 +82,9 @@ public class TestChars
         assertByteCountWithoutTrailingSpace("abc def ", 0, 5, 4, "abc");
 
         // invalid code points
-        assertByteCountWithoutTrailingSpace(new byte[]{(byte) 0x81, (byte) 0x81, (byte) ' ', (byte) 0x81}, 0, 3, 3, new byte[]{(byte) 0x81, (byte) 0x81});
-        assertByteCountWithoutTrailingSpace(new byte[]{(byte) 0x81, (byte) 0x81, (byte) ' ', (byte) 0x81}, 0, 2, 3, new byte[]{(byte) 0x81, (byte) 0x81});
-        assertByteCountWithoutTrailingSpace(new byte[]{(byte) 0x81, (byte) 0x81, (byte) ' ', (byte) 0x81}, 0, 0, 3, new byte[]{});
+        assertByteCountWithoutTrailingSpace(new byte[] {(byte) 0x81, (byte) 0x81, (byte) ' ', (byte) 0x81}, 0, 3, 3, new byte[] {(byte) 0x81, (byte) 0x81});
+        assertByteCountWithoutTrailingSpace(new byte[] {(byte) 0x81, (byte) 0x81, (byte) ' ', (byte) 0x81}, 0, 2, 3, new byte[] {(byte) 0x81, (byte) 0x81});
+        assertByteCountWithoutTrailingSpace(new byte[] {(byte) 0x81, (byte) 0x81, (byte) ' ', (byte) 0x81}, 0, 0, 3, new byte[] {});
     }
 
     private static void assertByteCountWithoutTrailingSpaceFailure(String string, int offset, int maxLength)

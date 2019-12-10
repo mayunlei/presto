@@ -13,9 +13,8 @@
  */
 package com.facebook.presto.sql.planner.iterative.rule;
 
-import com.facebook.presto.sql.planner.Symbol;
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.iterative.rule.test.BaseRuleTest;
-import com.facebook.presto.sql.planner.plan.Assignments;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import org.testng.annotations.Test;
@@ -24,23 +23,25 @@ import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.expres
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.markDistinct;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.strictProject;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.values;
+import static com.facebook.presto.sql.planner.iterative.rule.test.PlanBuilder.assignment;
+import static com.facebook.presto.sql.planner.plan.AssignmentUtils.identityAssignmentsAsSymbolReferences;
+import static com.facebook.presto.sql.relational.OriginalExpressionUtils.asSymbolReference;
 
 public class TestPruneMarkDistinctColumns
         extends BaseRuleTest
 {
     @Test
     public void testMarkerSymbolNotReferenced()
-            throws Exception
     {
         tester().assertThat(new PruneMarkDistinctColumns())
                 .on(p ->
                 {
-                    Symbol key = p.symbol("key");
-                    Symbol key2 = p.symbol("key2");
-                    Symbol mark = p.symbol("mark");
-                    Symbol unused = p.symbol("unused");
+                    VariableReferenceExpression key = p.variable("key");
+                    VariableReferenceExpression key2 = p.variable("key2");
+                    VariableReferenceExpression mark = p.variable("mark");
+                    VariableReferenceExpression unused = p.variable("unused");
                     return p.project(
-                            Assignments.of(key2, key.toSymbolReference()),
+                            assignment(key2, asSymbolReference(key)),
                             p.markDistinct(mark, ImmutableList.of(key), p.values(key, unused)));
                 })
                 .matches(
@@ -51,17 +52,16 @@ public class TestPruneMarkDistinctColumns
 
     @Test
     public void testSourceSymbolNotReferenced()
-            throws Exception
     {
         tester().assertThat(new PruneMarkDistinctColumns())
                 .on(p ->
                 {
-                    Symbol key = p.symbol("key");
-                    Symbol mark = p.symbol("mark");
-                    Symbol hash = p.symbol("hash");
-                    Symbol unused = p.symbol("unused");
+                    VariableReferenceExpression key = p.variable("key");
+                    VariableReferenceExpression mark = p.variable("mark");
+                    VariableReferenceExpression hash = p.variable("hash");
+                    VariableReferenceExpression unused = p.variable("unused");
                     return p.project(
-                            Assignments.identity(mark),
+                            identityAssignmentsAsSymbolReferences(mark),
                             p.markDistinct(
                                     mark,
                                     ImmutableList.of(key),
@@ -81,15 +81,14 @@ public class TestPruneMarkDistinctColumns
 
     @Test
     public void testKeySymbolNotReferenced()
-            throws Exception
     {
         tester().assertThat(new PruneMarkDistinctColumns())
                 .on(p ->
                 {
-                    Symbol key = p.symbol("key");
-                    Symbol mark = p.symbol("mark");
+                    VariableReferenceExpression key = p.variable("key");
+                    VariableReferenceExpression mark = p.variable("mark");
                     return p.project(
-                            Assignments.identity(mark),
+                            identityAssignmentsAsSymbolReferences(mark),
                             p.markDistinct(mark, ImmutableList.of(key), p.values(key)));
                 })
                 .doesNotFire();
@@ -97,15 +96,14 @@ public class TestPruneMarkDistinctColumns
 
     @Test
     public void testAllOutputsReferenced()
-            throws Exception
     {
         tester().assertThat(new PruneMarkDistinctColumns())
                 .on(p ->
                 {
-                    Symbol key = p.symbol("key");
-                    Symbol mark = p.symbol("mark");
+                    VariableReferenceExpression key = p.variable("key");
+                    VariableReferenceExpression mark = p.variable("mark");
                     return p.project(
-                            Assignments.identity(key, mark),
+                            identityAssignmentsAsSymbolReferences(key, mark),
                             p.markDistinct(mark, ImmutableList.of(key), p.values(key)));
                 })
                 .doesNotFire();

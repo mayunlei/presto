@@ -8,6 +8,7 @@ Functions and Operators
     functions/logical
     functions/comparison
     functions/conditional
+    functions/lambda
     functions/conversion
     functions/math
     functions/bitwise
@@ -21,8 +22,11 @@ Functions and Operators
     functions/window
     functions/array
     functions/map
-    functions/lambda
     functions/url
+    functions/ip
     functions/geospatial
+    functions/hyperloglog
+    functions/qdigest
     functions/color
+    functions/session
     functions/teradata

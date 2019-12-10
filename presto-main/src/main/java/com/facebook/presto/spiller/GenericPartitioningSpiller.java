@@ -13,8 +13,7 @@
  */
 package com.facebook.presto.spiller;
 
-import com.facebook.presto.memory.AggregatedMemoryContext;
-import com.facebook.presto.memory.SynchronizedAggregatedMemoryContext;
+import com.facebook.presto.memory.context.AggregatedMemoryContext;
 import com.facebook.presto.operator.PartitionFunction;
 import com.facebook.presto.operator.SpillContext;
 import com.facebook.presto.spi.Page;
@@ -38,11 +37,10 @@ import java.util.Set;
 import java.util.function.IntPredicate;
 import java.util.function.Predicate;
 
-import static com.facebook.presto.memory.SynchronizedAggregatedMemoryContext.synchronizedMemoryContext;
+import static com.facebook.airlift.concurrent.MoreFutures.getFutureValue;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Verify.verify;
-import static io.airlift.concurrent.MoreFutures.getFutureValue;
 import static java.util.Objects.requireNonNull;
 
 @ThreadSafe
@@ -54,13 +52,13 @@ public class GenericPartitioningSpiller
     private final Closer closer = Closer.create();
     private final SingleStreamSpillerFactory spillerFactory;
     private final SpillContext spillContext;
-    private final SynchronizedAggregatedMemoryContext memoryContext;
+    private final AggregatedMemoryContext memoryContext;
 
     private final PageBuilder[] pageBuilders;
     private final Optional<SingleStreamSpiller>[] spillers;
 
     private boolean readingStarted;
-    private Set<Integer> spilledPartitions = new HashSet<>();
+    private final Set<Integer> spilledPartitions = new HashSet<>();
 
     public GenericPartitioningSpiller(
             List<Type> types,
@@ -78,8 +76,7 @@ public class GenericPartitioningSpiller
 
         requireNonNull(memoryContext, "memoryContext is null");
         closer.register(memoryContext::close);
-        this.memoryContext = synchronizedMemoryContext(memoryContext);
-
+        this.memoryContext = memoryContext;
         int partitionCount = partitionFunction.getPartitionCount();
         this.pageBuilders = new PageBuilder[partitionCount];
         //noinspection unchecked
@@ -117,7 +114,7 @@ public class GenericPartitioningSpiller
         IntArrayList unspilledPositions = partitionPage(page, spillPartitionMask);
         ListenableFuture<?> future = flushFullBuilders();
 
-        return new PartitioningSpillResult(future, page.mask(unspilledPositions.toIntArray()));
+        return new PartitioningSpillResult(future, page.getPositions(unspilledPositions.elements(), 0, unspilledPositions.size()));
     }
 
     private synchronized IntArrayList partitionPage(Page page, IntPredicate spillPartitionMask)
@@ -185,7 +182,7 @@ public class GenericPartitioningSpiller
     {
         Optional<SingleStreamSpiller> spiller = spillers[partition];
         if (!spiller.isPresent()) {
-            spiller = Optional.of(closer.register(spillerFactory.create(types, spillContext, memoryContext.newLocalMemoryContext())));
+            spiller = Optional.of(closer.register(spillerFactory.create(types, spillContext, memoryContext.newLocalMemoryContext(GenericPartitioningSpiller.class.getSimpleName()))));
             spillers[partition] = spiller;
         }
         return spiller.get();

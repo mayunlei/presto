@@ -13,8 +13,8 @@
  */
 package com.facebook.presto.execution.scheduler;
 
-import com.facebook.presto.OutputBuffers;
-import com.facebook.presto.OutputBuffers.OutputBufferId;
+import com.facebook.presto.execution.buffer.OutputBuffers;
+import com.facebook.presto.execution.buffer.OutputBuffers.OutputBufferId;
 import com.google.common.collect.ImmutableList;
 import org.testng.annotations.Test;
 
@@ -31,7 +31,6 @@ public class TestPartitionedOutputBufferManager
 {
     @Test
     public void test()
-            throws Exception
     {
         AtomicReference<OutputBuffers> outputBufferTarget = new AtomicReference<>();
 

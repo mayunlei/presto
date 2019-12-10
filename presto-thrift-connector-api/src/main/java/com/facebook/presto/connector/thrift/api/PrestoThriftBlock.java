@@ -13,6 +13,9 @@
  */
 package com.facebook.presto.connector.thrift.api;
 
+import com.facebook.drift.annotations.ThriftConstructor;
+import com.facebook.drift.annotations.ThriftField;
+import com.facebook.drift.annotations.ThriftStruct;
 import com.facebook.presto.connector.thrift.api.datatypes.PrestoThriftBigint;
 import com.facebook.presto.connector.thrift.api.datatypes.PrestoThriftBigintArray;
 import com.facebook.presto.connector.thrift.api.datatypes.PrestoThriftBoolean;
@@ -28,18 +31,15 @@ import com.facebook.presto.spi.RecordCursor;
 import com.facebook.presto.spi.RecordSet;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.block.BlockBuilderStatus;
 import com.facebook.presto.spi.type.BigintType;
 import com.facebook.presto.spi.type.Type;
-import com.facebook.swift.codec.ThriftConstructor;
-import com.facebook.swift.codec.ThriftField;
-import com.facebook.swift.codec.ThriftStruct;
 import io.airlift.slice.Slice;
 
 import javax.annotation.Nullable;
 
 import java.util.Objects;
 
+import static com.facebook.drift.annotations.ThriftField.Requiredness.OPTIONAL;
 import static com.facebook.presto.spi.type.StandardTypes.ARRAY;
 import static com.facebook.presto.spi.type.StandardTypes.BIGINT;
 import static com.facebook.presto.spi.type.StandardTypes.BOOLEAN;
@@ -50,7 +50,6 @@ import static com.facebook.presto.spi.type.StandardTypes.INTEGER;
 import static com.facebook.presto.spi.type.StandardTypes.JSON;
 import static com.facebook.presto.spi.type.StandardTypes.TIMESTAMP;
 import static com.facebook.presto.spi.type.StandardTypes.VARCHAR;
-import static com.facebook.swift.codec.ThriftField.Requiredness.OPTIONAL;
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
@@ -324,7 +323,7 @@ public final class PrestoThriftBlock
     private static Block convertColumnToBlock(RecordSet recordSet, int columnIndex, int positions)
     {
         Type type = recordSet.getColumnTypes().get(columnIndex);
-        BlockBuilder output = type.createBlockBuilder(new BlockBuilderStatus(), positions);
+        BlockBuilder output = type.createBlockBuilder(null, positions);
         Class<?> javaType = type.getJavaType();
         RecordCursor cursor = recordSet.cursor();
         for (int position = 0; position < positions; position++) {

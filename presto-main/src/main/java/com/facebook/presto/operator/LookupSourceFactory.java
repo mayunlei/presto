@@ -13,8 +13,8 @@
  */
 package com.facebook.presto.operator;
 
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.sql.planner.Symbol;
 import com.google.common.util.concurrent.ListenableFuture;
 
 import java.util.List;
@@ -26,6 +26,7 @@ import static com.google.common.util.concurrent.Futures.immediateFuture;
 import static java.util.Collections.emptyList;
 
 public interface LookupSourceFactory
+        extends JoinBridge
 {
     List<Type> getTypes();
 
@@ -49,12 +50,19 @@ public interface LookupSourceFactory
     /**
      * Can be called only after {@link #createLookupSourceProvider()} is done and all users of {@link LookupSource}-s finished.
      */
+    @Override
     OuterPositionIterator getOuterPositionIterator();
 
-    Map<Symbol, Integer> getLayout();
+    Map<VariableReferenceExpression, Integer> getLayout();
 
     // this is only here for the index lookup source
     default void setTaskContext(TaskContext taskContext) {}
 
+    @Override
     void destroy();
+
+    default ListenableFuture<?> isDestroyed()
+    {
+        throw new UnsupportedOperationException();
+    }
 }

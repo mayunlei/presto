@@ -13,13 +13,29 @@
  */
 package com.facebook.presto.server;
 
-import io.airlift.configuration.Config;
+import com.facebook.airlift.configuration.Config;
+import com.facebook.airlift.configuration.ConfigDescription;
+import com.facebook.airlift.configuration.ConfigSecuritySensitive;
+import io.airlift.units.DataSize;
+
+import java.util.Optional;
+
+import static io.airlift.units.DataSize.Unit.MEGABYTE;
 
 public class InternalCommunicationConfig
 {
+    public static final String INTERNAL_COMMUNICATION_KERBEROS_ENABLED = "internal-communication.kerberos.enabled";
+
     private boolean httpsRequired;
     private String keyStorePath;
     private String keyStorePassword;
+    private String trustStorePath;
+    private Optional<String> excludeCipherSuites = Optional.empty();
+    private Optional<String> includedCipherSuites = Optional.empty();
+    private boolean kerberosEnabled;
+    private boolean kerberosUseCanonicalHostname = true;
+    private boolean binaryTransportEnabled;
+    private DataSize maxTaskUpdateSize = new DataSize(16, MEGABYTE);
 
     public boolean isHttpsRequired()
     {
@@ -51,9 +67,96 @@ public class InternalCommunicationConfig
     }
 
     @Config("internal-communication.https.keystore.key")
+    @ConfigSecuritySensitive
     public InternalCommunicationConfig setKeyStorePassword(String keyStorePassword)
     {
         this.keyStorePassword = keyStorePassword;
+        return this;
+    }
+
+    public String getTrustStorePath()
+    {
+        return trustStorePath;
+    }
+
+    @Config("internal-communication.https.trust-store-path")
+    public InternalCommunicationConfig setTrustStorePath(String trustStorePath)
+    {
+        this.trustStorePath = trustStorePath;
+        return this;
+    }
+
+    public Optional<String> getIncludedCipherSuites()
+    {
+        return includedCipherSuites;
+    }
+
+    @Config("internal-communication.https.included-cipher")
+    public InternalCommunicationConfig setIncludedCipherSuites(String includedCipherSuites)
+    {
+        this.includedCipherSuites = Optional.ofNullable(includedCipherSuites);
+        return this;
+    }
+
+    public Optional<String> getExcludeCipherSuites()
+    {
+        return excludeCipherSuites;
+    }
+
+    @Config("internal-communication.https.excluded-cipher")
+    public InternalCommunicationConfig setExcludeCipherSuites(String excludeCipherSuites)
+    {
+        this.excludeCipherSuites = Optional.ofNullable(excludeCipherSuites);
+        return this;
+    }
+
+    public boolean isKerberosEnabled()
+    {
+        return kerberosEnabled;
+    }
+
+    @Config(INTERNAL_COMMUNICATION_KERBEROS_ENABLED)
+    public InternalCommunicationConfig setKerberosEnabled(boolean kerberosEnabled)
+    {
+        this.kerberosEnabled = kerberosEnabled;
+        return this;
+    }
+
+    public boolean isKerberosUseCanonicalHostname()
+    {
+        return kerberosUseCanonicalHostname;
+    }
+
+    @Config("internal-communication.kerberos.use-canonical-hostname")
+    public InternalCommunicationConfig setKerberosUseCanonicalHostname(boolean kerberosUseCanonicalHostname)
+    {
+        this.kerberosUseCanonicalHostname = kerberosUseCanonicalHostname;
+        return this;
+    }
+
+    public boolean isBinaryTransportEnabled()
+    {
+        return binaryTransportEnabled;
+    }
+
+    @Config("experimental.internal-communication.binary-transport-enabled")
+    @ConfigDescription("Enables smile encoding support for coordinator-to-worker communication")
+    public InternalCommunicationConfig setBinaryTransportEnabled(boolean binaryTransportEnabled)
+    {
+        this.binaryTransportEnabled = binaryTransportEnabled;
+        return this;
+    }
+
+    public DataSize getMaxTaskUpdateSize()
+    {
+        return maxTaskUpdateSize;
+    }
+
+    @Config("experimental.internal-communication.max-task-update-size")
+    @ConfigDescription("Enables limit on the size of the task update")
+    public InternalCommunicationConfig setMaxTaskUpdateSize(DataSize maxTaskUpdateSize)
+    {
+        this.maxTaskUpdateSize = maxTaskUpdateSize;
         return this;
     }
 }

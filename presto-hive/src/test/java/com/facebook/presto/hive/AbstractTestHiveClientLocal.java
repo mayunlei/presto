@@ -15,10 +15,10 @@ package com.facebook.presto.hive;
 
 import com.facebook.presto.hive.metastore.Database;
 import com.facebook.presto.hive.metastore.ExtendedHiveMetastore;
-import com.facebook.presto.hive.metastore.PrincipalType;
 import com.facebook.presto.spi.ConnectorTableHandle;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.connector.ConnectorMetadata;
+import com.facebook.presto.spi.security.PrincipalType;
 import com.google.common.io.Files;
 import org.testng.SkipException;
 import org.testng.annotations.AfterClass;
@@ -29,11 +29,25 @@ import java.io.IOException;
 
 import static com.google.common.io.MoreFiles.deleteRecursively;
 import static com.google.common.io.RecursiveDeleteOption.ALLOW_INSECURE;
+import static java.util.Objects.requireNonNull;
 
 public abstract class AbstractTestHiveClientLocal
         extends AbstractTestHiveClient
 {
+    private static final String DEFAULT_TEST_DB_NAME = "test";
+
     private File tempDir;
+    private String testDbName;
+
+    protected AbstractTestHiveClientLocal()
+    {
+        this(DEFAULT_TEST_DB_NAME);
+    }
+
+    protected AbstractTestHiveClientLocal(String testDbName)
+    {
+        this.testDbName = requireNonNull(testDbName, "testDbName is null");
+    }
 
     protected abstract ExtendedHiveMetastore createMetastore(File tempDir);
 
@@ -45,22 +59,28 @@ public abstract class AbstractTestHiveClientLocal
         ExtendedHiveMetastore metastore = createMetastore(tempDir);
 
         metastore.createDatabase(Database.builder()
-                .setDatabaseName("test")
+                .setDatabaseName(testDbName)
                 .setOwnerName("public")
                 .setOwnerType(PrincipalType.ROLE)
                 .build());
 
         HiveClientConfig hiveConfig = new HiveClientConfig()
                 .setTimeZone("America/Los_Angeles");
+        MetastoreClientConfig metastoreClientConfig = new MetastoreClientConfig();
 
-        setup("test", hiveConfig, metastore);
+        setup(testDbName, hiveConfig, metastoreClientConfig, metastore);
     }
 
     @AfterClass(alwaysRun = true)
     public void cleanup()
             throws IOException
     {
-        deleteRecursively(tempDir.toPath(), ALLOW_INSECURE);
+        try {
+            getMetastoreClient().dropDatabase(testDbName);
+        }
+        finally {
+            deleteRecursively(tempDir.toPath(), ALLOW_INSECURE);
+        }
     }
 
     @Override

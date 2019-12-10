@@ -17,6 +17,7 @@ import com.facebook.presto.array.BlockBigArray;
 import com.facebook.presto.array.BooleanBigArray;
 import com.facebook.presto.array.ByteBigArray;
 import com.facebook.presto.array.DoubleBigArray;
+import com.facebook.presto.array.IntBigArray;
 import com.facebook.presto.array.LongBigArray;
 import com.facebook.presto.array.SliceBigArray;
 import com.facebook.presto.bytecode.BytecodeBlock;
@@ -39,7 +40,6 @@ import com.facebook.presto.spi.type.RowType;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.gen.CallSiteBinder;
 import com.facebook.presto.sql.gen.SqlTypeBytecodeExpression;
-import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -64,13 +64,10 @@ import static com.facebook.presto.bytecode.Access.PRIVATE;
 import static com.facebook.presto.bytecode.Access.PUBLIC;
 import static com.facebook.presto.bytecode.Access.STATIC;
 import static com.facebook.presto.bytecode.Access.a;
-import static com.facebook.presto.bytecode.CompilerUtils.defineClass;
-import static com.facebook.presto.bytecode.CompilerUtils.makeClassName;
 import static com.facebook.presto.bytecode.Parameter.arg;
 import static com.facebook.presto.bytecode.ParameterizedType.type;
 import static com.facebook.presto.bytecode.expression.BytecodeExpressions.add;
 import static com.facebook.presto.bytecode.expression.BytecodeExpressions.constantBoolean;
-import static com.facebook.presto.bytecode.expression.BytecodeExpressions.constantClass;
 import static com.facebook.presto.bytecode.expression.BytecodeExpressions.constantInt;
 import static com.facebook.presto.bytecode.expression.BytecodeExpressions.constantNull;
 import static com.facebook.presto.bytecode.expression.BytecodeExpressions.constantNumber;
@@ -81,13 +78,18 @@ import static com.facebook.presto.bytecode.expression.BytecodeExpressions.newIns
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
+import static com.facebook.presto.spi.type.IntegerType.INTEGER;
 import static com.facebook.presto.spi.type.TinyintType.TINYINT;
 import static com.facebook.presto.spi.type.VarbinaryType.VARBINARY;
 import static com.facebook.presto.sql.gen.SqlTypeBytecodeExpression.constantType;
+import static com.facebook.presto.type.UnknownType.UNKNOWN;
+import static com.facebook.presto.util.CompilerUtils.defineClass;
+import static com.facebook.presto.util.CompilerUtils.makeClassName;
 import static com.google.common.base.CaseFormat.LOWER_CAMEL;
 import static com.google.common.base.CaseFormat.UPPER_CAMEL;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.ImmutableList.toImmutableList;
+import static com.google.common.collect.Iterables.getOnlyElement;
 import static java.util.Objects.requireNonNull;
 
 public class StateCompiler
@@ -110,6 +112,9 @@ public class StateCompiler
         if (type.equals(boolean.class)) {
             return BooleanBigArray.class;
         }
+        if (type.equals(int.class)) {
+            return IntBigArray.class;
+        }
         if (type.equals(Slice.class)) {
             return SliceBigArray.class;
         }
@@ -122,8 +127,8 @@ public class StateCompiler
 
     public static Set<Class<?>> getSupportedFieldTypes()
     {
-        // byte.class is needed for TriStateBooleanState
-        return ImmutableSet.of(byte.class, boolean.class, long.class, double.class, Slice.class, Block.class);
+        // byte.class and int.class are needed for TriStateBooleanState and Object/SliceBlockPositionState respectively
+        return ImmutableSet.of(byte.class, boolean.class, long.class, double.class, int.class, Slice.class, Block.class);
     }
 
     public static <T> AccumulatorStateSerializer<T> generateStateSerializer(Class<T> clazz)
@@ -144,7 +149,7 @@ public class StateCompiler
                 return (AccumulatorStateSerializer<T>) metadata.stateSerializerClass().getConstructor().newInstance();
             }
             catch (InstantiationException | IllegalAccessException | NoSuchMethodException | InvocationTargetException e) {
-                throw Throwables.propagate(e);
+                throw new RuntimeException(e);
             }
         }
 
@@ -166,10 +171,10 @@ public class StateCompiler
 
         Class<? extends AccumulatorStateSerializer> serializerClass = defineClass(definition, AccumulatorStateSerializer.class, callSiteBinder.getBindings(), classLoader);
         try {
-            return (AccumulatorStateSerializer<T>) serializerClass.newInstance();
+            return (AccumulatorStateSerializer<T>) serializerClass.getConstructor().newInstance();
         }
-        catch (InstantiationException | IllegalAccessException e) {
-            throw Throwables.propagate(e);
+        catch (ReflectiveOperationException e) {
+            throw new RuntimeException(e);
         }
     }
 
@@ -180,10 +185,13 @@ public class StateCompiler
         Type type;
         if (fields.size() > 1) {
             List<Type> types = fields.stream().map(StateField::getSqlType).collect(toImmutableList());
-            type = new RowType(types, Optional.empty());
+            type = RowType.withDefaultFieldNames(types);
+        }
+        else if (fields.size() == 1) {
+            type = getOnlyElement(fields).getSqlType();
         }
         else {
-            type = fields.get(0).getSqlType();
+            type = UNKNOWN;
         }
 
         body.comment("return %s", type.getTypeSignature())
@@ -217,7 +225,7 @@ public class StateCompiler
         BytecodeBlock deserializerBody = method.getBody();
         Scope scope = method.getScope();
         if (fields.size() == 1) {
-            StateField field = fields.get(0);
+            StateField field = getOnlyElement(fields);
             Method setter = getSetter(clazz, field);
             if (!field.isPrimitiveType()) {
                 deserializerBody.append(new IfStatement()
@@ -226,16 +234,16 @@ public class StateCompiler
                         .ifFalse(state.cast(setter.getDeclaringClass()).invoke(setter, constantType(binder, field.getSqlType()).getValue(block, index))));
             }
             else {
-                // For primitive type, we need to cast here because we serialize byte fields with TINYINT (whose java type is long).
+                // For primitive type, we need to cast here because we serialize byte fields with TINYINT/INTEGER (whose java type is long).
                 deserializerBody.append(
                         state.cast(setter.getDeclaringClass()).invoke(
                                 setter,
                                 constantType(binder, field.getSqlType()).getValue(block, index).cast(field.getType())));
             }
         }
-        else {
+        else if (fields.size() > 1) {
             Variable row = scope.declareVariable(Block.class, "row");
-            deserializerBody.append(row.set(block.invoke("getObject", Object.class, index, constantClass(Block.class)).cast(Block.class)));
+            deserializerBody.append(row.set(block.invoke("getBlock", Block.class, index)));
             int position = 0;
             for (StateField field : fields) {
                 Method setter = getSetter(clazz, field);
@@ -246,7 +254,7 @@ public class StateCompiler
                             .ifFalse(state.cast(setter.getDeclaringClass()).invoke(setter, constantType(binder, field.getSqlType()).getValue(row, constantInt(position)))));
                 }
                 else {
-                    // For primitive type, we need to cast here because we serialize byte fields with TINYINT (whose java type is long).
+                    // For primitive type, we need to cast here because we serialize byte fields with TINYINT/INTEGER (whose java type is long).
                     deserializerBody.append(
                             state.cast(setter.getDeclaringClass()).invoke(
                                     setter,
@@ -266,23 +274,26 @@ public class StateCompiler
         Scope scope = method.getScope();
         BytecodeBlock serializerBody = method.getBody();
 
-        if (fields.size() == 1) {
-            Method getter = getGetter(clazz, fields.get(0));
-            SqlTypeBytecodeExpression sqlType = constantType(binder, fields.get(0).getSqlType());
+        if (fields.size() == 0) {
+            serializerBody.append(out.invoke("appendNull", BlockBuilder.class).pop());
+        }
+        else if (fields.size() == 1) {
+            Method getter = getGetter(clazz, getOnlyElement(fields));
+            SqlTypeBytecodeExpression sqlType = constantType(binder, getOnlyElement(fields).getSqlType());
             Variable fieldValue = scope.declareVariable(getter.getReturnType(), "value");
             serializerBody.append(fieldValue.set(state.cast(getter.getDeclaringClass()).invoke(getter)));
-            if (!fields.get(0).isPrimitiveType()) {
+            if (!getOnlyElement(fields).isPrimitiveType()) {
                 serializerBody.append(new IfStatement()
                         .condition(equal(fieldValue, constantNull(getter.getReturnType())))
                         .ifTrue(out.invoke("appendNull", BlockBuilder.class).pop())
                         .ifFalse(sqlType.writeValue(out, fieldValue)));
             }
             else {
-                // For primitive type, we need to cast here because we serialize byte fields with TINYINT (whose java type is long).
-                serializerBody.append(sqlType.writeValue(out, fieldValue.cast(fields.get(0).getSqlType().getJavaType())));
+                // For primitive type, we need to cast here because we serialize byte fields with TINYINT/INTEGER (whose java type is long).
+                serializerBody.append(sqlType.writeValue(out, fieldValue.cast(getOnlyElement(fields).getSqlType().getJavaType())));
             }
         }
-        else {
+        else if (fields.size() > 1) {
             Variable rowBuilder = scope.declareVariable(BlockBuilder.class, "rowBuilder");
             serializerBody.append(rowBuilder.set(out.invoke("beginBlockEntry", BlockBuilder.class)));
             for (StateField field : fields) {
@@ -296,7 +307,7 @@ public class StateCompiler
                             .ifFalse(sqlType.writeValue(rowBuilder, fieldValue)));
                 }
                 else {
-                    // For primitive type, we need to cast here because we serialize byte fields with TINYINT (whose java type is long).
+                    // For primitive type, we need to cast here because we serialize byte fields with TINYINT/INTEGER (whose java type is long).
                     serializerBody.append(sqlType.writeValue(rowBuilder, fieldValue.cast(field.getSqlType().getJavaType())));
                 }
             }
@@ -311,7 +322,7 @@ public class StateCompiler
             return clazz.getMethod(field.getSetterName(), field.getType());
         }
         catch (NoSuchMethodException e) {
-            throw Throwables.propagate(e);
+            throw new RuntimeException(e);
         }
     }
 
@@ -321,7 +332,7 @@ public class StateCompiler
             return clazz.getMethod(field.getGetterName());
         }
         catch (NoSuchMethodException e) {
-            throw Throwables.propagate(e);
+            throw new RuntimeException(e);
         }
     }
 
@@ -343,7 +354,7 @@ public class StateCompiler
                 return (AccumulatorStateFactory<T>) metadata.stateFactoryClass().getConstructor().newInstance();
             }
             catch (InstantiationException | IllegalAccessException | NoSuchMethodException | InvocationTargetException e) {
-                throw Throwables.propagate(e);
+                throw new RuntimeException(e);
             }
         }
 
@@ -388,10 +399,10 @@ public class StateCompiler
 
         Class<? extends AccumulatorStateFactory> factoryClass = defineClass(definition, AccumulatorStateFactory.class, classLoader);
         try {
-            return (AccumulatorStateFactory<T>) factoryClass.newInstance();
+            return (AccumulatorStateFactory<T>) factoryClass.getConstructor().newInstance();
         }
-        catch (InstantiationException | IllegalAccessException e) {
-            throw Throwables.propagate(e);
+        catch (ReflectiveOperationException e) {
+            throw new RuntimeException(e);
         }
     }
 
@@ -562,7 +573,7 @@ public class StateCompiler
     private static List<StateField> enumerateFields(Class<?> clazz, Map<String, Type> fieldTypes)
     {
         ImmutableList.Builder<StateField> builder = ImmutableList.builder();
-        final Set<Class<?>> primitiveClasses = ImmutableSet.of(byte.class, boolean.class, long.class, double.class);
+        final Set<Class<?>> primitiveClasses = ImmutableSet.of(byte.class, boolean.class, long.class, double.class, int.class);
         Set<Class<?>> supportedClasses = getSupportedFieldTypes();
         for (Method method : clazz.getMethods()) {
             if (method.getName().equals("getEstimatedSize")) {
@@ -701,7 +712,9 @@ public class StateCompiler
             checkArgument(sqlType != null, "sqlType is null");
             if (sqlType.isPresent()) {
                 checkArgument(
-                        (sqlType.get().getJavaType() == type) || ((type == byte.class) && TINYINT.equals(sqlType.get())),
+                        (sqlType.get().getJavaType() == type) ||
+                                ((type == byte.class) && TINYINT.equals(sqlType.get())) ||
+                                ((type == int.class) && INTEGER.equals(sqlType.get())),
                         "Stack type (%s) and provided sql type (%s) are incompatible", type.getName(), sqlType.get().getDisplayName());
             }
             else {
@@ -723,6 +736,9 @@ public class StateCompiler
             }
             else if (stackType == byte.class) {
                 return Optional.of(TINYINT);
+            }
+            else if (stackType == int.class) {
+                return Optional.of(INTEGER);
             }
             else if (stackType == Slice.class) {
                 return Optional.of(VARBINARY);
@@ -763,7 +779,7 @@ public class StateCompiler
         boolean isPrimitiveType()
         {
             Class<?> type = getType();
-            return (type == long.class || type == double.class || type == boolean.class || type == byte.class);
+            return (type == long.class || type == double.class || type == boolean.class || type == byte.class || type == int.class);
         }
 
         public BytecodeExpression initialValueExpression()

@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.operator.scalar;
 
+import com.facebook.airlift.json.ObjectMapperProvider;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.block.Block;
@@ -33,7 +34,6 @@ import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.databind.MappingJsonFactory;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.primitives.Doubles;
-import io.airlift.json.ObjectMapperProvider;
 import io.airlift.slice.DynamicSliceOutput;
 import io.airlift.slice.Slice;
 import io.airlift.slice.SliceOutput;
@@ -46,6 +46,7 @@ import java.util.List;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
 import static com.facebook.presto.spi.type.Chars.padSpaces;
 import static com.facebook.presto.util.JsonUtil.createJsonParser;
+import static com.facebook.presto.util.JsonUtil.truncateIfNecessaryForErrorMessage;
 import static com.fasterxml.jackson.core.JsonFactory.Feature.CANONICALIZE_FIELD_NAMES;
 import static com.fasterxml.jackson.core.JsonParser.NumberType;
 import static com.fasterxml.jackson.core.JsonToken.END_ARRAY;
@@ -86,6 +87,44 @@ public final class JsonFunctions
     public static JsonPath castCharToJsonPath(@LiteralParameter("x") Long charLength, @SqlType("char(x)") Slice pattern)
     {
         return new JsonPath(padSpaces(pattern, charLength.intValue()).toStringUtf8());
+    }
+
+    @ScalarFunction("is_json_scalar")
+    @LiteralParameters("x")
+    @SqlType(StandardTypes.BOOLEAN)
+    public static boolean varcharIsJsonScalar(@SqlType("varchar(x)") Slice json)
+    {
+        return isJsonScalar(json);
+    }
+
+    @ScalarFunction
+    @SqlType(StandardTypes.BOOLEAN)
+    public static boolean isJsonScalar(@SqlType(StandardTypes.JSON) Slice json)
+    {
+        try (JsonParser parser = createJsonParser(JSON_FACTORY, json)) {
+            JsonToken nextToken = parser.nextToken();
+            if (nextToken == null) {
+                throw new PrestoException(INVALID_FUNCTION_ARGUMENT, "Invalid JSON value: " + truncateIfNecessaryForErrorMessage(json));
+            }
+
+            if (nextToken == START_ARRAY || nextToken == START_OBJECT) {
+                parser.skipChildren();
+                if (parser.nextToken() != null) {
+                    // extra trailing token after json array/object
+                    throw new PrestoException(INVALID_FUNCTION_ARGUMENT, "Invalid JSON value: " + truncateIfNecessaryForErrorMessage(json));
+                }
+                return false;
+            }
+
+            if (parser.nextToken() != null) {
+                // extra trailing token after json scalar
+                throw new PrestoException(INVALID_FUNCTION_ARGUMENT, "Invalid JSON value: " + truncateIfNecessaryForErrorMessage(json));
+            }
+            return true;
+        }
+        catch (IOException e) {
+            throw new PrestoException(INVALID_FUNCTION_ARGUMENT, "Invalid JSON value: " + truncateIfNecessaryForErrorMessage(json));
+        }
     }
 
     @ScalarFunction

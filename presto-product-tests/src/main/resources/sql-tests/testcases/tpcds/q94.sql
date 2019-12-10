@@ -1,4 +1,4 @@
--- database: presto_tpcds; groups: tpcds; requires: com.teradata.tempto.fulfillment.table.hive.tpcds.ImmutableTpcdsTablesRequirements
+-- database: presto_tpcds; groups: tpcds; requires: io.prestodb.tempto.fulfillment.table.hive.tpcds.ImmutableTpcdsTablesRequirements
 SELECT
   "count"(DISTINCT "ws_order_number") "order count"
 , "sum"("ws_ext_ship_cost") "total shipping cost"
@@ -13,7 +13,7 @@ WHERE ("d_date" BETWEEN CAST('1999-2-01' AS DATE) AND (CAST('1999-2-01' AS DATE)
    AND ("ws1"."ws_ship_addr_sk" = "ca_address_sk")
    AND ("ca_state" = 'IL')
    AND ("ws1"."ws_web_site_sk" = "web_site_sk")
-   AND ("web_company_name" = 'pri                                               ')
+   AND ("web_company_name" = 'pri')
    AND (EXISTS (
    SELECT *
    FROM

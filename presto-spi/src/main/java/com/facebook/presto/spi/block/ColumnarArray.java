@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.spi.block;
 
+import static io.airlift.slice.SizeOf.sizeOf;
 import static java.util.Objects.requireNonNull;
 
 public class ColumnarArray
@@ -34,11 +35,11 @@ public class ColumnarArray
         }
 
         if (!(block instanceof AbstractArrayBlock)) {
-            throw new IllegalArgumentException("Invalid array block");
+            throw new IllegalArgumentException("Invalid array block: " + block.getClass().getName());
         }
 
         AbstractArrayBlock arrayBlock = (AbstractArrayBlock) block;
-        Block elementsBlock = arrayBlock.getValues();
+        Block elementsBlock = arrayBlock.getRawElementBlock();
 
         // trim elements to just visible region
         int elementsOffset = 0;
@@ -132,16 +133,26 @@ public class ColumnarArray
 
     public int getLength(int position)
     {
-        return getOffset(position + 1) - getOffset(position);
+        return (offsets[position + 1 + offsetsOffset] - offsets[position + offsetsOffset]);
     }
 
-    private int getOffset(int position)
+    public int getOffset(int position)
     {
-        return offsets[position + offsetsOffset];
+        return (offsets[position + offsetsOffset] - offsets[offsetsOffset]);
     }
 
     public Block getElementsBlock()
     {
         return elementsBlock;
+    }
+
+    public Block getNullCheckBlock()
+    {
+        return nullCheckBlock;
+    }
+
+    public long getRetainedSizeInBytes()
+    {
+        return nullCheckBlock.getRetainedSizeInBytes() + elementsBlock.getRetainedSizeInBytes() + sizeOf(offsets);
     }
 }

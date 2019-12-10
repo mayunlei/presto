@@ -13,7 +13,7 @@
  */
 package com.facebook.presto.sql.planner.iterative.rule;
 
-import com.facebook.presto.sql.planner.Symbol;
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.iterative.rule.test.BaseRuleTest;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -29,13 +29,12 @@ public class TestPruneOutputColumns
 {
     @Test
     public void testNotAllOutputsReferenced()
-            throws Exception
     {
         tester().assertThat(new PruneOutputColumns())
                 .on(p ->
                 {
-                    Symbol a = p.symbol("a");
-                    Symbol b = p.symbol("b");
+                    VariableReferenceExpression a = p.variable("a");
+                    VariableReferenceExpression b = p.variable("b");
                     return p.output(
                             ImmutableList.of("B label"),
                             ImmutableList.of(b),
@@ -51,13 +50,12 @@ public class TestPruneOutputColumns
 
     @Test
     public void testAllOutputsReferenced()
-            throws Exception
     {
         tester().assertThat(new PruneOutputColumns())
                 .on(p ->
                 {
-                    Symbol a = p.symbol("a");
-                    Symbol b = p.symbol("b");
+                    VariableReferenceExpression a = p.variable("a");
+                    VariableReferenceExpression b = p.variable("b");
                     return p.output(
                             ImmutableList.of("A label", "B label"),
                             ImmutableList.of(a, b),

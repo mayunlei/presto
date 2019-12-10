@@ -13,25 +13,20 @@
  */
 package com.facebook.presto.plugin.postgresql;
 
-import com.facebook.presto.tests.AbstractTestQueries;
-import io.airlift.testing.postgresql.TestingPostgreSqlServer;
+import com.facebook.airlift.testing.postgresql.TestingPostgreSqlServer;
+import com.facebook.presto.tests.AbstractTestDistributedQueries;
+import com.google.common.collect.ImmutableMap;
 import io.airlift.tpch.TpchTable;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.Test;
 
 import java.io.IOException;
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.SQLException;
-import java.sql.Statement;
 
 import static com.facebook.presto.plugin.postgresql.PostgreSqlQueryRunner.createPostgreSqlQueryRunner;
-import static org.testng.Assert.assertFalse;
-import static org.testng.Assert.assertTrue;
 
 @Test
 public class TestPostgreSqlDistributedQueries
-        extends AbstractTestQueries
+        extends AbstractTestDistributedQueries
 {
     private final TestingPostgreSqlServer postgreSqlServer;
 
@@ -42,10 +37,15 @@ public class TestPostgreSqlDistributedQueries
     }
 
     public TestPostgreSqlDistributedQueries(TestingPostgreSqlServer postgreSqlServer)
-            throws Exception
     {
-        super(() -> createPostgreSqlQueryRunner(postgreSqlServer, TpchTable.getTables()));
+        super(() -> createPostgreSqlQueryRunner(postgreSqlServer, ImmutableMap.of(), TpchTable.getTables()));
         this.postgreSqlServer = postgreSqlServer;
+    }
+
+    @Override
+    protected boolean supportsViews()
+    {
+        return false;
     }
 
     @AfterClass(alwaysRun = true)
@@ -56,40 +56,17 @@ public class TestPostgreSqlDistributedQueries
     }
 
     @Override
-    public void testLargeIn()
+    public void testInsert()
     {
-        // the PostgreSQL query fails with "stack depth limit exceeded"
-        // TODO: fix QueryBuilder not to generate such a large query
-        // https://github.com/prestodb/presto/issues/5752
+        // no op -- test not supported due to lack of support for array types.  See
+        // TestPostgreSqlIntegrationSmokeTest for insertion tests.
     }
 
-    @Test
-    public void testDropTable()
+    @Override
+    public void testDelete()
     {
-        assertUpdate("CREATE TABLE test_drop AS SELECT 123 x", 1);
-        assertTrue(getQueryRunner().tableExists(getSession(), "test_drop"));
-
-        assertUpdate("DROP TABLE test_drop");
-        assertFalse(getQueryRunner().tableExists(getSession(), "test_drop"));
+        // Delete is currently unsupported
     }
 
-    @Test
-    public void testViews()
-            throws Exception
-    {
-        execute("CREATE OR REPLACE VIEW tpch.test_view AS SELECT * FROM tpch.orders");
-
-        assertQuery("SELECT orderkey FROM test_view", "SELECT orderkey FROM orders");
-
-        execute("DROP VIEW IF EXISTS tpch.test_view");
-    }
-
-    private void execute(String sql)
-            throws SQLException
-    {
-        try (Connection connection = DriverManager.getConnection(postgreSqlServer.getJdbcUrl());
-                Statement statement = connection.createStatement()) {
-            statement.execute(sql);
-        }
-    }
+    // PostgreSQL specific tests should normally go in TestPostgreSqlIntegrationSmokeTest
 }

@@ -14,9 +14,9 @@
 package com.facebook.presto.sql.planner.assertions;
 
 import com.facebook.presto.Session;
-import com.facebook.presto.cost.PlanNodeCost;
+import com.facebook.presto.cost.StatsProvider;
 import com.facebook.presto.metadata.Metadata;
-import com.facebook.presto.sql.planner.plan.PlanNode;
+import com.facebook.presto.spi.plan.PlanNode;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
 
@@ -37,9 +37,9 @@ final class SymbolCardinalityMatcher
     }
 
     @Override
-    public MatchResult detailMatches(PlanNode node, PlanNodeCost planNodeCost, Session session, Metadata metadata, SymbolAliases symbolAliases)
+    public MatchResult detailMatches(PlanNode node, StatsProvider stats, Session session, Metadata metadata, SymbolAliases symbolAliases)
     {
-        return new MatchResult(node.getOutputSymbols().size() == numberOfSymbols);
+        return new MatchResult(node.getOutputVariables().size() == numberOfSymbols);
     }
 
     @Override

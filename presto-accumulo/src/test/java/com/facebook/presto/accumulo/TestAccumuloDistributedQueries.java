@@ -32,15 +32,20 @@ import static org.testng.Assert.assertTrue;
  * For the lineitem and partsupp tables, there is no unique identifier,
  * so a generated UUID is used in order to prevent overwriting rows of data.
  * This is the same for any test cases that were creating tables with duplicate rows,
- * so some test cases are overriden from the base class and slightly modified to add an additional UUID column.
+ * so some test cases are overridden from the base class and slightly modified to add an additional UUID column.
  */
 public class TestAccumuloDistributedQueries
         extends AbstractTestDistributedQueries
 {
     public TestAccumuloDistributedQueries()
-            throws Exception
     {
         super(() -> createAccumuloQueryRunner(ImmutableMap.of()));
+    }
+
+    @Override
+    protected boolean supportsNotNullColumns()
+    {
+        return false;
     }
 
     @Override
@@ -60,6 +65,8 @@ public class TestAccumuloDistributedQueries
     {
         // This test is overridden due to Function "UUID" not found errors
         // Some test cases from the base class are removed
+
+        // TODO some test cases from overridden method succeed to create table, but with wrong number or rows.
 
         assertUpdate("CREATE TABLE test_create_table_as_if_not_exists (a bigint, b double)");
         assertTrue(getQueryRunner().tableExists(getSession(), "test_create_table_as_if_not_exists"));
@@ -178,14 +185,6 @@ public class TestAccumuloDistributedQueries
                 + "extendedprice, discount, tax, returnflag, linestatus, "
                 + "shipdate, commitdate, receiptdate, shipinstruct, shipmode, a.comment "
                 + "FROM (SELECT * FROM lineitem WHERE orderkey % 2 = 0) a LEFT JOIN orders ON a.orderkey = orders.orderkey");
-    }
-
-    @Override
-    @Test
-    public void testJoinWithDuplicateRelations()
-    {
-        // Override because of extra UUID column in lineitem table, cannot SELECT *
-        // Cannot munge test to pass due to aliased data sets 'x' containing duplicate orderkey and comment columns
     }
 
     @Override

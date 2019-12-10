@@ -29,6 +29,12 @@ public interface ConnectorPageSource
     long getCompletedBytes();
 
     /**
+     * Gets the number of input rows processed by this page source so far.
+     * If number is not available, this method should return zero.
+     */
+    long getCompletedPositions();
+
+    /**
      * Gets the wall time this page source spent reading data from the input.
      * If read time is not available, this method should return zero.
      */
@@ -45,10 +51,10 @@ public interface ConnectorPageSource
     Page getNextPage();
 
     /**
-     * Get the total memory that needs to be reserved in the system memory pool.
+     * Get the total memory that needs to be reserved in the general memory pool.
      * This memory should include any buffers, etc. that are used for reading data.
      *
-     * @return the system memory used so far in table read
+     * @return the memory used so far in table read
      */
     long getSystemMemoryUsage();
 

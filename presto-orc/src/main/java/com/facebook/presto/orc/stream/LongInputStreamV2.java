@@ -16,13 +16,11 @@ package com.facebook.presto.orc.stream;
 import com.facebook.presto.orc.OrcCorruptionException;
 import com.facebook.presto.orc.checkpoint.LongStreamCheckpoint;
 import com.facebook.presto.orc.checkpoint.LongStreamV2Checkpoint;
-import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.type.Type;
 
 import java.io.IOException;
 import java.io.InputStream;
 
-import static java.lang.Math.toIntExact;
+import static java.lang.Math.min;
 
 /**
  * @see {@link org.apache.hadoop.hive.ql.io.orc.RunLengthIntegerWriterV2} for description of various lightweight compression techniques.
@@ -337,6 +335,80 @@ public class LongInputStreamV2
     }
 
     @Override
+    public void next(long[] values, int items)
+            throws IOException
+    {
+        int offset = 0;
+        while (items > 0) {
+            if (used == numLiterals) {
+                numLiterals = 0;
+                used = 0;
+                readValues();
+            }
+
+            int chunkSize = min(numLiterals - used, items);
+            System.arraycopy(literals, used, values, offset, chunkSize);
+            used += chunkSize;
+            offset += chunkSize;
+            items -= chunkSize;
+        }
+    }
+
+    @Override
+    public void next(int[] values, int items)
+            throws IOException
+    {
+        int offset = 0;
+        while (items > 0) {
+            if (used == numLiterals) {
+                numLiterals = 0;
+                used = 0;
+                readValues();
+            }
+
+            int chunkSize = min(numLiterals - used, items);
+            for (int i = 0; i < chunkSize; i++) {
+                long literal = literals[used + i];
+                int value = (int) literal;
+                if (literal != value) {
+                    throw new OrcCorruptionException(input.getOrcDataSourceId(), "Decoded value out of range for a 32bit number");
+                }
+                values[offset + i] = value;
+            }
+            used += chunkSize;
+            offset += chunkSize;
+            items -= chunkSize;
+        }
+    }
+
+    @Override
+    public void next(short[] values, int items)
+            throws IOException
+    {
+        int offset = 0;
+        while (items > 0) {
+            if (used == numLiterals) {
+                numLiterals = 0;
+                used = 0;
+                readValues();
+            }
+
+            int chunkSize = min(numLiterals - used, items);
+            for (int i = 0; i < chunkSize; i++) {
+                long literal = literals[used + i];
+                short value = (short) literal;
+                if (literal != value) {
+                    throw new OrcCorruptionException(input.getOrcDataSourceId(), "Decoded value out of range for a 16bit number");
+                }
+                values[offset + i] = value;
+            }
+            used += chunkSize;
+            offset += chunkSize;
+            items -= chunkSize;
+        }
+    }
+
+    @Override
     public Class<LongStreamV2Checkpoint> getCheckpointType()
     {
         return LongStreamV2Checkpoint.class;
@@ -371,83 +443,9 @@ public class LongInputStreamV2
                 used = 0;
                 readValues();
             }
-            long consume = Math.min(items, numLiterals - used);
+            long consume = min(items, numLiterals - used);
             used += consume;
             items -= consume;
-        }
-    }
-
-    @Override
-    public long sum(int items)
-            throws IOException
-    {
-        long sum = 0;
-        for (int i = 0; i < items; i++) {
-            sum += next();
-        }
-        return sum;
-    }
-
-    @Override
-    public void nextLongVector(Type type, int items, BlockBuilder builder)
-            throws IOException
-    {
-        for (int i = 0; i < items; i++) {
-            type.writeLong(builder, next());
-        }
-    }
-
-    @Override
-    public void nextLongVector(Type type, int items, BlockBuilder builder, boolean[] isNull)
-            throws IOException
-    {
-        for (int i = 0; i < items; i++) {
-            if (isNull[i]) {
-                builder.appendNull();
-            }
-            else {
-                type.writeLong(builder, next());
-            }
-        }
-    }
-
-    @Override
-    public void nextLongVector(int items, long[] vector)
-            throws IOException
-    {
-        for (int i = 0; i < items; i++) {
-            vector[i] = next();
-        }
-    }
-
-    @Override
-    public void nextLongVector(int items, long[] vector, boolean[] isNull)
-            throws IOException
-    {
-        for (int i = 0; i < items; i++) {
-            if (!isNull[i]) {
-                vector[i] = next();
-            }
-        }
-    }
-
-    @Override
-    public void nextIntVector(int items, int[] vector)
-            throws IOException
-    {
-        for (int i = 0; i < items; i++) {
-            vector[i] = toIntExact(next());
-        }
-    }
-
-    @Override
-    public void nextIntVector(int items, int[] vector, boolean[] isNull)
-            throws IOException
-    {
-        for (int i = 0; i < items; i++) {
-            if (!isNull[i]) {
-                vector[i] = toIntExact(next());
-            }
         }
     }
 }

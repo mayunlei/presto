@@ -1,4 +1,4 @@
--- database: presto_tpcds; groups: tpcds; requires: com.teradata.tempto.fulfillment.table.hive.tpcds.ImmutableTpcdsTablesRequirements
+-- database: presto_tpcds; groups: tpcds; requires: io.prestodb.tempto.fulfillment.table.hive.tpcds.ImmutableTpcdsTablesRequirements
 SELECT
   "cc_call_center_id" "Call_Center"
 , "cc_name" "Call_Center_Name"
@@ -21,10 +21,10 @@ WHERE ("cr_call_center_sk" = "cc_call_center_sk")
    AND ("d_year" = 1998)
    AND ("d_moy" = 11)
    AND ((("cd_marital_status" = 'M')
-         AND ("cd_education_status" = 'Unknown             '))
+         AND ("cd_education_status" = 'Unknown'))
       OR (("cd_marital_status" = 'W')
-         AND ("cd_education_status" = 'Advanced Degree     ')))
-   AND ("hd_buy_potential" LIKE 'Unknown        ')
+         AND ("cd_education_status" = 'Advanced Degree')))
+   AND ("hd_buy_potential" LIKE 'Unknown')
    AND ("ca_gmt_offset" = -7)
 GROUP BY "cc_call_center_id", "cc_name", "cc_manager", "cd_marital_status", "cd_education_status"
 ORDER BY "sum"("cr_net_loss") DESC

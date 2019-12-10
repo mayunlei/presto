@@ -14,7 +14,7 @@
 package com.facebook.presto.type;
 
 import com.facebook.presto.annotation.UsedByGeneratedCode;
-import com.facebook.presto.metadata.Signature;
+import com.facebook.presto.metadata.SignatureBuilder;
 import com.facebook.presto.metadata.SqlScalarFunction;
 import com.facebook.presto.spi.type.Type;
 import com.google.common.collect.ImmutableList;
@@ -24,7 +24,7 @@ import io.airlift.slice.Slice;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 
-import static com.facebook.presto.metadata.FunctionKind.SCALAR;
+import static com.facebook.presto.spi.function.FunctionKind.SCALAR;
 import static com.facebook.presto.spi.function.OperatorType.SATURATED_FLOOR_CAST;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.Decimals.bigIntegerTenToNth;
@@ -42,22 +42,24 @@ public final class DecimalSaturatedFloorCasts
 {
     private DecimalSaturatedFloorCasts() {}
 
-    public static final SqlScalarFunction DECIMAL_TO_DECIMAL_SATURATED_FLOOR_CAST = SqlScalarFunction.builder(DecimalSaturatedFloorCasts.class)
-            .signature(Signature.builder()
+    public static final SqlScalarFunction DECIMAL_TO_DECIMAL_SATURATED_FLOOR_CAST = SqlScalarFunction.builder(DecimalSaturatedFloorCasts.class, SATURATED_FLOOR_CAST)
+            .signature(SignatureBuilder.builder()
                     .kind(SCALAR)
                     .operatorType(SATURATED_FLOOR_CAST)
                     .argumentTypes(parseTypeSignature("decimal(source_precision,source_scale)", ImmutableSet.of("source_precision", "source_scale")))
                     .returnType(parseTypeSignature("decimal(result_precision,result_scale)", ImmutableSet.of("result_precision", "result_scale")))
                     .build())
-            .implementation(b -> b
-                    .methods("shortDecimalToShortDecimal", "shortDecimalToLongDecimal", "longDecimalToShortDecimal", "longDecimalToLongDecimal")
-                    .withExtraParameters((context) -> {
-                        int sourcePrecision = toIntExact(context.getLiteral("source_precision"));
-                        int sourceScale = toIntExact(context.getLiteral("source_scale"));
-                        int resultPrecision = toIntExact(context.getLiteral("result_precision"));
-                        int resultScale = toIntExact(context.getLiteral("result_scale"));
-                        return ImmutableList.of(sourcePrecision, sourceScale, resultPrecision, resultScale);
-                    }))
+            .deterministic(true)
+            .choice(choice -> choice
+                    .implementation(methodsGroup -> methodsGroup
+                            .methods("shortDecimalToShortDecimal", "shortDecimalToLongDecimal", "longDecimalToShortDecimal", "longDecimalToLongDecimal")
+                            .withExtraParameters((context) -> {
+                                int sourcePrecision = toIntExact(context.getLiteral("source_precision"));
+                                int sourceScale = toIntExact(context.getLiteral("source_scale"));
+                                int resultPrecision = toIntExact(context.getLiteral("result_precision"));
+                                int resultScale = toIntExact(context.getLiteral("result_scale"));
+                                return ImmutableList.of(sourcePrecision, sourceScale, resultPrecision, resultScale);
+                            })))
             .build();
 
     @UsedByGeneratedCode
@@ -111,19 +113,21 @@ public final class DecimalSaturatedFloorCasts
 
     private static SqlScalarFunction decimalToGenericIntegerTypeSaturatedFloorCast(Type type, long minValue, long maxValue)
     {
-        return SqlScalarFunction.builder(DecimalSaturatedFloorCasts.class)
-                .signature(Signature.builder()
+        return SqlScalarFunction.builder(DecimalSaturatedFloorCasts.class, SATURATED_FLOOR_CAST)
+                .signature(SignatureBuilder.builder()
                         .kind(SCALAR)
                         .operatorType(SATURATED_FLOOR_CAST)
                         .argumentTypes(parseTypeSignature("decimal(source_precision,source_scale)", ImmutableSet.of("source_precision", "source_scale")))
                         .returnType(type.getTypeSignature())
                         .build())
-                .implementation(b -> b
-                        .methods("shortDecimalToGenericIntegerType", "longDecimalToGenericIntegerType")
-                        .withExtraParameters((context) -> {
-                            int sourceScale = toIntExact(context.getLiteral("source_scale"));
-                            return ImmutableList.of(sourceScale, minValue, maxValue);
-                        }))
+                .deterministic(true)
+                .choice(choice -> choice
+                        .implementation(methodsGroup -> methodsGroup
+                                .methods("shortDecimalToGenericIntegerType", "longDecimalToGenericIntegerType")
+                                .withExtraParameters((context) -> {
+                                    int sourceScale = toIntExact(context.getLiteral("source_scale"));
+                                    return ImmutableList.of(sourceScale, minValue, maxValue);
+                                })))
                 .build();
     }
 
@@ -159,20 +163,22 @@ public final class DecimalSaturatedFloorCasts
 
     private static SqlScalarFunction genericIntegerTypeToDecimalSaturatedFloorCast(Type integerType)
     {
-        return SqlScalarFunction.builder(DecimalSaturatedFloorCasts.class)
-                .signature(Signature.builder()
+        return SqlScalarFunction.builder(DecimalSaturatedFloorCasts.class, SATURATED_FLOOR_CAST)
+                .signature(SignatureBuilder.builder()
                         .kind(SCALAR)
                         .operatorType(SATURATED_FLOOR_CAST)
                         .argumentTypes(integerType.getTypeSignature())
                         .returnType(parseTypeSignature("decimal(result_precision,result_scale)", ImmutableSet.of("result_precision", "result_scale")))
                         .build())
-                .implementation(b -> b
-                        .methods("genericIntegerTypeToShortDecimal", "genericIntegerTypeToLongDecimal")
-                        .withExtraParameters((context) -> {
-                            int resultPrecision = toIntExact(context.getLiteral("result_precision"));
-                            int resultScale = toIntExact(context.getLiteral("result_scale"));
-                            return ImmutableList.of(resultPrecision, resultScale);
-                        }))
+                .deterministic(true)
+                .choice(choice -> choice
+                        .implementation(methodsGroup -> methodsGroup
+                                .methods("genericIntegerTypeToShortDecimal", "genericIntegerTypeToLongDecimal")
+                                .withExtraParameters((context) -> {
+                                    int resultPrecision = toIntExact(context.getLiteral("result_precision"));
+                                    int resultScale = toIntExact(context.getLiteral("result_scale"));
+                                    return ImmutableList.of(resultPrecision, resultScale);
+                                })))
                 .build();
     }
 

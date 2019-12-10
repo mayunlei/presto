@@ -35,6 +35,7 @@ import java.io.OutputStream;
 import java.util.List;
 import java.util.Map.Entry;
 
+import static com.google.common.base.Preconditions.checkArgument;
 import static java.lang.Math.toIntExact;
 import static java.util.stream.Collectors.toList;
 
@@ -42,6 +43,8 @@ public class OrcMetadataWriter
         implements MetadataWriter
 {
     // see https://github.com/prestodb/orc-protobuf/blob/master/src/main/protobuf/orc_proto.proto
+    private static final int PRESTO_WRITER_ID = 2;
+    // in order to change this value, the master Apache ORC proto file must be updated
     private static final int ORC_WRITER_VERSION = 6;
     private static final List<Integer> ORC_METADATA_VERSION = ImmutableList.of(0, 12);
 
@@ -94,6 +97,7 @@ public class OrcMetadataWriter
             throws IOException
     {
         OrcProto.Footer footerProtobuf = OrcProto.Footer.newBuilder()
+                .setWriter(PRESTO_WRITER_ID)
                 .setNumberOfRows(footer.getNumberOfRows())
                 .setRowIndexStride(footer.getRowsInRowGroup())
                 .addAllStripes(footer.getStripes().stream()
@@ -201,10 +205,13 @@ public class OrcMetadataWriter
         }
 
         if (columnStatistics.getIntegerStatistics() != null) {
-            builder.setIntStatistics(OrcProto.IntegerStatistics.newBuilder()
+            OrcProto.IntegerStatistics.Builder integerStatistics = OrcProto.IntegerStatistics.newBuilder()
                     .setMinimum(columnStatistics.getIntegerStatistics().getMin())
-                    .setMaximum(columnStatistics.getIntegerStatistics().getMax())
-                    .build());
+                    .setMaximum(columnStatistics.getIntegerStatistics().getMax());
+            if (columnStatistics.getIntegerStatistics().getSum() != null) {
+                integerStatistics.setSum(columnStatistics.getIntegerStatistics().getSum());
+            }
+            builder.setIntStatistics(integerStatistics.build());
         }
 
         if (columnStatistics.getDoubleStatistics() != null) {
@@ -215,10 +222,15 @@ public class OrcMetadataWriter
         }
 
         if (columnStatistics.getStringStatistics() != null) {
-            builder.setStringStatistics(OrcProto.StringStatistics.newBuilder()
-                    .setMinimumBytes(ByteString.copyFrom(columnStatistics.getStringStatistics().getMin().getBytes()))
-                    .setMaximumBytes(ByteString.copyFrom(columnStatistics.getStringStatistics().getMax().getBytes()))
-                    .build());
+            OrcProto.StringStatistics.Builder statisticsBuilder = OrcProto.StringStatistics.newBuilder();
+            if (columnStatistics.getStringStatistics().getMin() != null) {
+                statisticsBuilder.setMinimumBytes(ByteString.copyFrom(columnStatistics.getStringStatistics().getMin().getBytes()));
+            }
+            if (columnStatistics.getStringStatistics().getMax() != null) {
+                statisticsBuilder.setMaximumBytes(ByteString.copyFrom(columnStatistics.getStringStatistics().getMax().getBytes()));
+            }
+            statisticsBuilder.setSum(columnStatistics.getStringStatistics().getSum());
+            builder.setStringStatistics(statisticsBuilder.build());
         }
 
         if (columnStatistics.getDateStatistics() != null) {
@@ -232,6 +244,12 @@ public class OrcMetadataWriter
             builder.setDecimalStatistics(OrcProto.DecimalStatistics.newBuilder()
                     .setMinimum(columnStatistics.getDecimalStatistics().getMin().toString())
                     .setMaximum(columnStatistics.getDecimalStatistics().getMax().toString())
+                    .build());
+        }
+
+        if (columnStatistics.getBinaryStatistics() != null) {
+            builder.setBinaryStatistics(OrcProto.BinaryStatistics.newBuilder()
+                    .setSum(columnStatistics.getBinaryStatistics().getSum())
                     .build());
         }
 
@@ -294,6 +312,10 @@ public class OrcMetadataWriter
 
     private static OrcProto.ColumnEncoding toColumnEncoding(ColumnEncoding columnEncodings)
     {
+        checkArgument(
+                !columnEncodings.getAdditionalSequenceEncodings().isPresent(),
+                "Writing columns with non-zero sequence IDs is not supported in ORC: " + columnEncodings);
+
         return OrcProto.ColumnEncoding.newBuilder()
                 .setKind(toColumnEncoding(columnEncodings.getColumnEncodingKind()))
                 .setDictionarySize(columnEncodings.getDictionarySize())
@@ -327,12 +349,6 @@ public class OrcMetadataWriter
         return writeProtobufObject(output, rowIndexProtobuf);
     }
 
-    @Override
-    public MetadataReader getMetadataReader()
-    {
-        return new OrcMetadataReader();
-    }
-
     private static RowIndexEntry toRowGroupIndex(RowGroupIndex rowGroupIndex)
     {
         return OrcProto.RowIndexEntry.newBuilder()
@@ -352,6 +368,10 @@ public class OrcMetadataWriter
                 return OrcProto.CompressionKind.ZLIB;
             case SNAPPY:
                 return OrcProto.CompressionKind.SNAPPY;
+            case LZ4:
+                return OrcProto.CompressionKind.LZ4;
+            case ZSTD:
+                return OrcProto.CompressionKind.ZSTD;
         }
         throw new IllegalArgumentException("Unsupported compression kind: " + compressionKind);
     }

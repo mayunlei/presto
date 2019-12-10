@@ -18,6 +18,8 @@ import com.facebook.presto.hive.HdfsEnvironment;
 import com.facebook.presto.hive.HiveClientConfig;
 import com.facebook.presto.hive.HiveCompressionCodec;
 import com.facebook.presto.hive.HiveSessionProperties;
+import com.facebook.presto.hive.OrcFileWriterConfig;
+import com.facebook.presto.hive.ParquetFileWriterConfig;
 import com.facebook.presto.spi.ConnectorPageSource;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.Page;
@@ -61,6 +63,7 @@ import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
+import static com.facebook.presto.hive.HiveTestUtils.METASTORE_CLIENT_CONFIG;
 import static com.facebook.presto.hive.HiveTestUtils.createTestHdfsEnvironment;
 import static com.facebook.presto.hive.HiveTestUtils.mapType;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
@@ -92,13 +95,12 @@ public class HiveFileFormatBenchmark
     }
 
     @SuppressWarnings("deprecation")
-    private static final HiveClientConfig CONFIG = new HiveClientConfig()
-            .setParquetOptimizedReaderEnabled(true);
+    private static final HiveClientConfig CONFIG = new HiveClientConfig();
 
-    private static final ConnectorSession SESSION = new TestingConnectorSession(new HiveSessionProperties(CONFIG)
+    private static final ConnectorSession SESSION = new TestingConnectorSession(new HiveSessionProperties(CONFIG, new OrcFileWriterConfig(), new ParquetFileWriterConfig())
             .getSessionProperties());
 
-    private static final HdfsEnvironment HDFS_ENVIRONMENT = createTestHdfsEnvironment(CONFIG);
+    private static final HdfsEnvironment HDFS_ENVIRONMENT = createTestHdfsEnvironment(CONFIG, METASTORE_CLIENT_CONFIG);
 
     @Param({
             "LINEITEM",
@@ -193,8 +195,7 @@ public class HiveFileFormatBenchmark
             while (!pageSource.isFinished()) {
                 Page page = pageSource.getNextPage();
                 if (page != null) {
-                    page.assureLoaded();
-                    pages.add(page);
+                    pages.add(page.getLoadedPage());
                 }
             }
         }

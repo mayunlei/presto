@@ -1,4 +1,4 @@
--- database: presto_tpcds; groups: tpcds; requires: com.teradata.tempto.fulfillment.table.hive.tpcds.ImmutableTpcdsTablesRequirements
+-- database: presto_tpcds; groups: tpcds; requires: io.prestodb.tempto.fulfillment.table.hive.tpcds.ImmutableTpcdsTablesRequirements
 SELECT
   "c_last_name"
 , "c_first_name"
@@ -22,8 +22,8 @@ FROM
       AND ("store_sales"."ss_hdemo_sk" = "household_demographics"."hd_demo_sk")
       AND (("date_dim"."d_dom" BETWEEN 1 AND 3)
          OR ("date_dim"."d_dom" BETWEEN 25 AND 28))
-      AND (("household_demographics"."hd_buy_potential" = '>10000         ')
-         OR ("household_demographics"."hd_buy_potential" = 'Unknown        '))
+      AND (("household_demographics"."hd_buy_potential" = '>10000')
+         OR ("household_demographics"."hd_buy_potential" = 'Unknown'))
       AND ("household_demographics"."hd_vehicle_count" > 0)
       AND ((CASE WHEN ("household_demographics"."hd_vehicle_count" > 0) THEN (CAST("household_demographics"."hd_dep_count" AS DECIMAL(7,2)) / "household_demographics"."hd_vehicle_count") ELSE null END) > DECIMAL '1.2')
       AND ("date_dim"."d_year" IN (1999   , (1999 + 1)   , (1999 + 2)))

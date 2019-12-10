@@ -13,21 +13,23 @@
  */
 package com.facebook.presto.operator.scalar;
 
+import com.facebook.presto.spi.PageBuilder;
+import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.block.BlockBuilderStatus;
 import com.facebook.presto.spi.function.Description;
 import com.facebook.presto.spi.function.OperatorDependency;
 import com.facebook.presto.spi.function.ScalarFunction;
 import com.facebook.presto.spi.function.SqlType;
 import com.facebook.presto.spi.function.TypeParameter;
-import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
+import com.google.common.collect.ImmutableList;
 
 import java.lang.invoke.MethodHandle;
 import java.util.ArrayList;
 import java.util.List;
 
+import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
 import static com.facebook.presto.spi.function.OperatorType.EQUAL;
 import static com.facebook.presto.spi.type.TypeUtils.readNativeValue;
 import static com.facebook.presto.util.Failures.internalError;
@@ -36,12 +38,18 @@ import static com.facebook.presto.util.Failures.internalError;
 @Description("Remove specified values from the given array")
 public final class ArrayRemoveFunction
 {
-    private ArrayRemoveFunction() {}
+    private final PageBuilder pageBuilder;
+
+    @TypeParameter("E")
+    public ArrayRemoveFunction(@TypeParameter("E") Type elementType)
+    {
+        pageBuilder = new PageBuilder(ImmutableList.of(elementType));
+    }
 
     @TypeParameter("E")
     @SqlType("array(E)")
-    public static Block remove(
-            @OperatorDependency(operator = EQUAL, returnType = StandardTypes.BOOLEAN, argumentTypes = {"E", "E"}) MethodHandle equalsFunction,
+    public Block remove(
+            @OperatorDependency(operator = EQUAL, argumentTypes = {"E", "E"}) MethodHandle equalsFunction,
             @TypeParameter("E") Type type,
             @SqlType("array(E)") Block array,
             @SqlType("E") long value)
@@ -51,8 +59,8 @@ public final class ArrayRemoveFunction
 
     @TypeParameter("E")
     @SqlType("array(E)")
-    public static Block remove(
-            @OperatorDependency(operator = EQUAL, returnType = StandardTypes.BOOLEAN, argumentTypes = {"E", "E"}) MethodHandle equalsFunction,
+    public Block remove(
+            @OperatorDependency(operator = EQUAL, argumentTypes = {"E", "E"}) MethodHandle equalsFunction,
             @TypeParameter("E") Type type,
             @SqlType("array(E)") Block array,
             @SqlType("E") double value)
@@ -62,8 +70,8 @@ public final class ArrayRemoveFunction
 
     @TypeParameter("E")
     @SqlType("array(E)")
-    public static Block remove(
-            @OperatorDependency(operator = EQUAL, returnType = StandardTypes.BOOLEAN, argumentTypes = {"E", "E"}) MethodHandle equalsFunction,
+    public Block remove(
+            @OperatorDependency(operator = EQUAL, argumentTypes = {"E", "E"}) MethodHandle equalsFunction,
             @TypeParameter("E") Type type,
             @SqlType("array(E)") Block array,
             @SqlType("E") boolean value)
@@ -73,22 +81,28 @@ public final class ArrayRemoveFunction
 
     @TypeParameter("E")
     @SqlType("array(E)")
-    public static Block remove(
-            @OperatorDependency(operator = EQUAL, returnType = StandardTypes.BOOLEAN, argumentTypes = {"E", "E"}) MethodHandle equalsFunction,
+    public Block remove(
+            @OperatorDependency(operator = EQUAL, argumentTypes = {"E", "E"}) MethodHandle equalsFunction,
             @TypeParameter("E") Type type,
             @SqlType("array(E)") Block array,
             @SqlType("E") Object value)
     {
-        int sizeAfterRemove = 0;
         List<Integer> positions = new ArrayList<>();
 
         for (int i = 0; i < array.getPositionCount(); i++) {
             Object element = readNativeValue(type, array, i);
 
             try {
-                if (element == null || !(boolean) equalsFunction.invoke(element, value)) {
+                if (element == null) {
                     positions.add(i);
-                    sizeAfterRemove += array.getRegionSizeInBytes(i, 1);
+                    continue;
+                }
+                Boolean result = (Boolean) equalsFunction.invoke(element, value);
+                if (result == null) {
+                    throw new PrestoException(NOT_SUPPORTED, "array_remove does not support arrays with elements that are null or contain null");
+                }
+                if (!result) {
+                    positions.add(i);
                 }
             }
             catch (Throwable t) {
@@ -100,16 +114,16 @@ public final class ArrayRemoveFunction
             return array;
         }
 
-        int entrySize = 0;
-        if (!positions.isEmpty()) {
-            entrySize = (int) Math.ceil(sizeAfterRemove / (double) positions.size());
+        if (pageBuilder.isFull()) {
+            pageBuilder.reset();
         }
-        BlockBuilder blockBuilder = type.createBlockBuilder(new BlockBuilderStatus(), positions.size(), entrySize);
+        BlockBuilder blockBuilder = pageBuilder.getBlockBuilder(0);
 
         for (int position : positions) {
             type.appendTo(array, position, blockBuilder);
         }
 
-        return blockBuilder.build();
+        pageBuilder.declarePositions(positions.size());
+        return blockBuilder.getRegion(blockBuilder.getPositionCount() - positions.size(), positions.size());
     }
 }

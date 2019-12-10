@@ -22,34 +22,41 @@ import com.facebook.presto.bytecode.FieldDefinition;
 import com.facebook.presto.bytecode.MethodDefinition;
 import com.facebook.presto.bytecode.OpCode;
 import com.facebook.presto.bytecode.Parameter;
+import com.facebook.presto.bytecode.Scope;
 import com.facebook.presto.bytecode.Variable;
 import com.facebook.presto.bytecode.control.ForLoop;
 import com.facebook.presto.bytecode.control.IfStatement;
 import com.facebook.presto.bytecode.expression.BytecodeExpression;
 import com.facebook.presto.bytecode.instruction.LabelNode;
+import com.facebook.presto.metadata.FunctionManager;
+import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.operator.JoinHash;
 import com.facebook.presto.operator.JoinHashSupplier;
 import com.facebook.presto.operator.LookupSourceSupplier;
 import com.facebook.presto.operator.PagesHash;
 import com.facebook.presto.operator.PagesHashStrategy;
+import com.facebook.presto.operator.scalar.BuiltInScalarFunctionImplementation;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PageBuilder;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
+import com.facebook.presto.spi.function.OperatorType;
 import com.facebook.presto.spi.type.BigintType;
+import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.facebook.presto.sql.gen.JoinFilterFunctionCompiler.JoinFilterFunctionFactory;
-import com.google.common.base.Throwables;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
 import com.google.common.collect.ImmutableList;
-import com.google.common.util.concurrent.ExecutionError;
-import com.google.common.util.concurrent.UncheckedExecutionException;
+import io.airlift.slice.Slice;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
 import org.openjdk.jol.info.ClassLayout;
 import org.weakref.jmx.Managed;
 import org.weakref.jmx.Nested;
+
+import javax.inject.Inject;
 
 import java.lang.reflect.Constructor;
 import java.util.ArrayList;
@@ -57,7 +64,6 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
-import java.util.concurrent.ExecutionException;
 import java.util.stream.IntStream;
 
 import static com.facebook.presto.bytecode.Access.FINAL;
@@ -65,8 +71,6 @@ import static com.facebook.presto.bytecode.Access.PRIVATE;
 import static com.facebook.presto.bytecode.Access.PUBLIC;
 import static com.facebook.presto.bytecode.Access.STATIC;
 import static com.facebook.presto.bytecode.Access.a;
-import static com.facebook.presto.bytecode.CompilerUtils.defineClass;
-import static com.facebook.presto.bytecode.CompilerUtils.makeClassName;
 import static com.facebook.presto.bytecode.Parameter.arg;
 import static com.facebook.presto.bytecode.ParameterizedType.type;
 import static com.facebook.presto.bytecode.expression.BytecodeExpressions.constantFalse;
@@ -77,12 +81,19 @@ import static com.facebook.presto.bytecode.expression.BytecodeExpressions.consta
 import static com.facebook.presto.bytecode.expression.BytecodeExpressions.getStatic;
 import static com.facebook.presto.bytecode.expression.BytecodeExpressions.newInstance;
 import static com.facebook.presto.bytecode.expression.BytecodeExpressions.notEqual;
+import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
+import static com.facebook.presto.sql.gen.InputReferenceCompiler.generateInputReference;
 import static com.facebook.presto.sql.gen.SqlTypeBytecodeExpression.constantType;
+import static com.facebook.presto.util.CompilerUtils.defineClass;
+import static com.facebook.presto.util.CompilerUtils.makeClassName;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static java.util.Objects.requireNonNull;
 
 public class JoinCompiler
 {
+    private final FunctionManager functionManager;
+    private final boolean groupByUsesEqualTo;
+
     private final LoadingCache<CacheKey, LookupSourceSupplierFactory> lookupSourceFactories = CacheBuilder.newBuilder()
             .recordStats()
             .maximumSize(1000)
@@ -98,6 +109,13 @@ public class JoinCompiler
     public LookupSourceSupplierFactory compileLookupSourceFactory(List<? extends Type> types, List<Integer> joinChannels, Optional<Integer> sortChannel)
     {
         return compileLookupSourceFactory(types, joinChannels, sortChannel, Optional.empty());
+    }
+
+    @Inject
+    public JoinCompiler(Metadata metadata, FeaturesConfig config)
+    {
+        this.functionManager = requireNonNull(metadata, "metadata is null").getFunctionManager();
+        this.groupByUsesEqualTo = requireNonNull(config, "config is null").isGroupByUsesEqualTo();
     }
 
     @Managed
@@ -116,16 +134,11 @@ public class JoinCompiler
 
     public LookupSourceSupplierFactory compileLookupSourceFactory(List<? extends Type> types, List<Integer> joinChannels, Optional<Integer> sortChannel, Optional<List<Integer>> outputChannels)
     {
-        try {
-            return lookupSourceFactories.get(new CacheKey(
-                    types,
-                    outputChannels.orElse(rangeList(types.size())),
-                    joinChannels,
-                    sortChannel));
-        }
-        catch (ExecutionException | UncheckedExecutionException | ExecutionError e) {
-            throw Throwables.propagate(e.getCause());
-        }
+        return lookupSourceFactories.getUnchecked(new CacheKey(
+                types,
+                outputChannels.orElse(rangeList(types.size())),
+                joinChannels,
+                sortChannel));
     }
 
     public PagesHashStrategyFactory compilePagesHashStrategyFactory(List<Type> types, List<Integer> joinChannels)
@@ -139,16 +152,11 @@ public class JoinCompiler
         requireNonNull(joinChannels, "joinChannels is null");
         requireNonNull(outputChannels, "outputChannels is null");
 
-        try {
-            return new PagesHashStrategyFactory(hashStrategies.get(new CacheKey(
-                    types,
-                    outputChannels.orElse(rangeList(types.size())),
-                    joinChannels,
-                    Optional.empty())));
-        }
-        catch (ExecutionException | UncheckedExecutionException | ExecutionError e) {
-            throw Throwables.propagate(e.getCause());
-        }
+        return new PagesHashStrategyFactory(hashStrategies.getUnchecked(new CacheKey(
+                types,
+                outputChannels.orElse(rangeList(types.size())),
+                joinChannels,
+                Optional.empty())));
     }
 
     private List<Integer> rangeList(int endExclusive)
@@ -222,6 +230,7 @@ public class JoinCompiler
         generateRowEqualsRowMethod(classDefinition, callSiteBinder, joinChannelTypes);
         generatePositionEqualsRowMethod(classDefinition, callSiteBinder, joinChannelTypes, joinChannelFields, true);
         generatePositionEqualsRowMethod(classDefinition, callSiteBinder, joinChannelTypes, joinChannelFields, false);
+        generatePositionNotDistinctFromRowWithPageMethod(classDefinition, callSiteBinder, joinChannelTypes, joinChannelFields);
         generatePositionEqualsRowWithPageMethod(classDefinition, callSiteBinder, joinChannelTypes, joinChannelFields);
         generatePositionEqualsPositionMethod(classDefinition, callSiteBinder, joinChannelTypes, joinChannelFields, true);
         generatePositionEqualsPositionMethod(classDefinition, callSiteBinder, joinChannelTypes, joinChannelFields, false);
@@ -616,22 +625,98 @@ public class JoinCompiler
 
         Variable thisVariable = positionEqualsRowMethod.getThis();
         BytecodeBlock body = positionEqualsRowMethod.getBody();
-
         for (int index = 0; index < joinChannelTypes.size(); index++) {
             BytecodeExpression type = constantType(callSiteBinder, joinChannelTypes.get(index));
-
             BytecodeExpression leftBlock = thisVariable
                     .getField(joinChannelFields.get(index))
                     .invoke("get", Object.class, leftBlockIndex)
                     .cast(Block.class);
 
             BytecodeExpression rightBlock = page.invoke("getBlock", Block.class, rightChannels.getElement(index));
-
             body.append(new IfStatement()
                     .condition(typeEquals(type, leftBlock, leftBlockPosition, rightBlock, rightPosition))
                     .ifFalse(constantFalse().ret()));
         }
+        body.append(constantTrue().ret());
+    }
 
+    private void generatePositionNotDistinctFromRowWithPageMethod(
+            ClassDefinition classDefinition,
+            CallSiteBinder callSiteBinder,
+            List<Type> joinChannelTypes,
+            List<FieldDefinition> joinChannelFields)
+    {
+        Parameter leftBlockIndex = arg("leftBlockIndex", int.class);
+        Parameter leftBlockPosition = arg("leftBlockPosition", int.class);
+        Parameter rightPosition = arg("rightPosition", int.class);
+        Parameter page = arg("page", Page.class);
+        Parameter rightChannels = arg("rightChannels", int[].class);
+
+        MethodDefinition positionNotDistinctFromRowMethod = classDefinition.declareMethod(
+                a(PUBLIC),
+                "positionNotDistinctFromRow",
+                type(boolean.class),
+                leftBlockIndex,
+                leftBlockPosition,
+                rightPosition,
+                page,
+                rightChannels);
+
+        Variable thisVariable = positionNotDistinctFromRowMethod.getThis();
+        Scope scope = positionNotDistinctFromRowMethod.getScope();
+        BytecodeBlock body = positionNotDistinctFromRowMethod.getBody();
+        if (groupByUsesEqualTo) {
+            // positionNotDistinctFromRow delegates to positionEqualsRow when groupByUsesEqualTo is set.
+            body.append(thisVariable.invoke(
+                    "positionEqualsRow",
+                    boolean.class,
+                    leftBlockIndex,
+                    leftBlockPosition,
+                    rightPosition,
+                    page,
+                    rightChannels).ret());
+            return;
+        }
+        scope.declareVariable("wasNull", body, constantFalse());
+        for (int index = 0; index < joinChannelTypes.size(); index++) {
+            BytecodeExpression leftBlock = thisVariable
+                    .getField(joinChannelFields.get(index))
+                    .invoke("get", Object.class, leftBlockIndex)
+                    .cast(Block.class);
+            BytecodeExpression rightBlock = page.invoke("getBlock", Block.class, rightChannels.getElement(index));
+            Type type = joinChannelTypes.get(index);
+            // This is a hack for performance reasons.
+            // Type.equalTo takes two pairs of Block+position.
+            // On the other hand, NOT_DISTINCT_FROM is an operator. It takes two Slices.
+            // As a result, two Slices must be constructed for each invocation, which has a nontrivial cost.
+            // For these types, their equal semantics is known to be the same as not-distinct-from except for null values.
+            //
+            // The plan is to allow scalar function to optionally provide an additional implementation using Block+position calling convention.
+            // At that point, we'll be able to fully deprecate Type.equalTo (and friends) and remove this hack.
+            if (type.getJavaType().equals(Slice.class)) {
+                switch (type.getTypeSignature().getBase()) {
+                    case StandardTypes.CHAR:
+                    case StandardTypes.IPADDRESS:
+                    case StandardTypes.JSON:
+                    case StandardTypes.DECIMAL:
+                    case StandardTypes.VARBINARY:
+                    case StandardTypes.VARCHAR:
+                        body.append(new IfStatement()
+                                .condition(typeEquals(constantType(callSiteBinder, type), leftBlock, leftBlockPosition, rightBlock, rightPosition))
+                                .ifFalse(constantFalse().ret()));
+                        continue;
+                }
+            }
+            BuiltInScalarFunctionImplementation operator = functionManager.getBuiltInScalarFunctionImplementation(functionManager.resolveOperator(OperatorType.IS_DISTINCT_FROM, fromTypes(type, type)));
+            callSiteBinder.bind(operator.getMethodHandle());
+            List<BytecodeNode> argumentsBytecode = new ArrayList<>();
+            argumentsBytecode.add(generateInputReference(callSiteBinder, scope, type, leftBlock, leftBlockPosition));
+            argumentsBytecode.add(generateInputReference(callSiteBinder, scope, type, rightBlock, rightPosition));
+
+            body.append(new IfStatement()
+                    .condition(BytecodeUtils.generateInvocation(scope, "isDistinctFrom", operator, Optional.empty(), argumentsBytecode, callSiteBinder))
+                    .ifTrue(constantFalse().ret()));
+        }
         body.append(constantTrue().ret());
     }
 
@@ -824,7 +909,7 @@ public class JoinCompiler
                 constructor = joinHashSupplierClass.getConstructor(Session.class, PagesHashStrategy.class, LongArrayList.class, List.class, Optional.class, Optional.class, List.class);
             }
             catch (NoSuchMethodException e) {
-                throw Throwables.propagate(e);
+                throw new RuntimeException(e);
             }
         }
 
@@ -841,8 +926,8 @@ public class JoinCompiler
             try {
                 return constructor.newInstance(session, pagesHashStrategy, addresses, channels, filterFunctionFactory, sortChannel, searchFunctionFactories);
             }
-            catch (Exception e) {
-                throw Throwables.propagate(e);
+            catch (ReflectiveOperationException e) {
+                throw new RuntimeException(e);
             }
         }
     }
@@ -857,7 +942,7 @@ public class JoinCompiler
                 constructor = pagesHashStrategyClass.getConstructor(List.class, OptionalInt.class);
             }
             catch (NoSuchMethodException e) {
-                throw Throwables.propagate(e);
+                throw new RuntimeException(e);
             }
         }
 
@@ -866,8 +951,8 @@ public class JoinCompiler
             try {
                 return constructor.newInstance(channels, hashChannel);
             }
-            catch (Exception e) {
-                throw Throwables.propagate(e);
+            catch (ReflectiveOperationException e) {
+                throw new RuntimeException(e);
             }
         }
     }

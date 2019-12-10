@@ -13,9 +13,8 @@
  */
 package com.facebook.presto.server.security;
 
-import com.google.common.base.Throwables;
+import com.facebook.airlift.log.Logger;
 import com.sun.security.auth.module.Krb5LoginModule;
-import io.airlift.log.Logger;
 import org.ietf.jgss.GSSContext;
 import org.ietf.jgss.GSSCredential;
 import org.ietf.jgss.GSSException;
@@ -65,7 +64,9 @@ public class KerberosAuthenticator
         System.setProperty("java.security.krb5.conf", config.getKerberosConfig().getAbsolutePath());
 
         try {
-            String hostname = InetAddress.getLocalHost().getCanonicalHostName().toLowerCase(Locale.US);
+            String hostname = Optional.ofNullable(config.getPrincipalHostname())
+                    .orElseGet(() -> getLocalHost().getCanonicalHostName())
+                    .toLowerCase(Locale.US);
             String servicePrincipal = config.getServiceName() + "/" + hostname;
             loginContext = new LoginContext("", null, null, new Configuration()
             {
@@ -100,8 +101,8 @@ public class KerberosAuthenticator
                     },
                     ACCEPT_ONLY));
         }
-        catch (LoginException | UnknownHostException e) {
-            throw Throwables.propagate(e);
+        catch (LoginException e) {
+            throw new RuntimeException(e);
         }
     }
 
@@ -112,7 +113,7 @@ public class KerberosAuthenticator
             loginContext.logout();
         }
         catch (LoginException e) {
-            Throwables.propagate(e);
+            throw new RuntimeException(e);
         }
     }
 
@@ -134,7 +135,7 @@ public class KerberosAuthenticator
                         return principal.get();
                     }
                 }
-                catch (GSSException | RuntimeException e) {
+                catch (RuntimeException e) {
                     throw new RuntimeException("Authentication error for token: " + parts[1], e);
                 }
             }
@@ -148,7 +149,6 @@ public class KerberosAuthenticator
     }
 
     private Optional<Principal> authenticate(String token)
-            throws GSSException
     {
         GSSContext context = doAs(loginContext.getSubject(), () -> gssManager.createContext(serverCredential));
 
@@ -192,8 +192,18 @@ public class KerberosAuthenticator
                 return action.get();
             }
             catch (GSSException e) {
-                throw Throwables.propagate(e);
+                throw new RuntimeException(e);
             }
         });
+    }
+
+    private static InetAddress getLocalHost()
+    {
+        try {
+            return InetAddress.getLocalHost();
+        }
+        catch (UnknownHostException e) {
+            throw new RuntimeException(e);
+        }
     }
 }

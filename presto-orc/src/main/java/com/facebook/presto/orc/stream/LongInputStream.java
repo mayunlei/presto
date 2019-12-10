@@ -14,10 +14,11 @@
 package com.facebook.presto.orc.stream;
 
 import com.facebook.presto.orc.checkpoint.LongStreamCheckpoint;
-import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.type.Type;
 
 import java.io.IOException;
+
+import static com.google.common.base.Preconditions.checkPositionIndex;
+import static java.lang.Math.toIntExact;
 
 public interface LongInputStream
         extends ValueInputStream<LongStreamCheckpoint>
@@ -25,24 +26,42 @@ public interface LongInputStream
     long next()
             throws IOException;
 
-    void nextIntVector(int items, int[] vector)
+    void next(long[] values, int items)
             throws IOException;
 
-    void nextIntVector(int items, int[] vector, boolean[] isNull)
+    void next(int[] values, int items)
             throws IOException;
 
-    void nextLongVector(int items, long[] vector)
+    void next(short[] values, int items)
             throws IOException;
 
-    void nextLongVector(int items, long[] vector, boolean[] isNull)
-            throws IOException;
+    default void nextIntVector(int items, int[] vector, int offset)
+            throws IOException
+    {
+        checkPositionIndex(items + offset, vector.length);
 
-    void nextLongVector(Type type, int items, BlockBuilder builder)
-            throws IOException;
+        for (int i = offset; i < items + offset; i++) {
+            vector[i] = toIntExact(next());
+        }
+    }
 
-    void nextLongVector(Type type, int items, BlockBuilder builder, boolean[] isNull)
-            throws IOException;
+    default void nextLongVector(int items, long[] vector)
+            throws IOException
+    {
+        checkPositionIndex(items, vector.length);
 
-    long sum(int items)
-            throws IOException;
+        for (int i = 0; i < items; i++) {
+            vector[i] = next();
+        }
+    }
+
+    default long sum(int items)
+            throws IOException
+    {
+        long sum = 0;
+        for (int i = 0; i < items; i++) {
+            sum += next();
+        }
+        return sum;
+    }
 }

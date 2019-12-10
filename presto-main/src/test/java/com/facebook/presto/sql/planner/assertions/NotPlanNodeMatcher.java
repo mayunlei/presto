@@ -14,9 +14,9 @@
 package com.facebook.presto.sql.planner.assertions;
 
 import com.facebook.presto.Session;
-import com.facebook.presto.cost.PlanNodeCost;
+import com.facebook.presto.cost.StatsProvider;
 import com.facebook.presto.metadata.Metadata;
-import com.facebook.presto.sql.planner.plan.PlanNode;
+import com.facebook.presto.spi.plan.PlanNode;
 
 import static com.facebook.presto.sql.planner.assertions.MatchResult.match;
 import static com.google.common.base.MoreObjects.toStringHelper;
@@ -40,7 +40,7 @@ final class NotPlanNodeMatcher
     }
 
     @Override
-    public MatchResult detailMatches(PlanNode node, PlanNodeCost cost, Session session, Metadata metadata, SymbolAliases symbolAliases)
+    public MatchResult detailMatches(PlanNode node, StatsProvider stats, Session session, Metadata metadata, SymbolAliases symbolAliases)
     {
         checkState(shapeMatches(node), "Plan testing framework error: shapeMatches returned false in detailMatches in %s", this.getClass().getName());
         return match();

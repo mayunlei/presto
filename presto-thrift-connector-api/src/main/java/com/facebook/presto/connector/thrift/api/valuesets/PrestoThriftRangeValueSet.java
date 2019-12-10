@@ -13,26 +13,26 @@
  */
 package com.facebook.presto.connector.thrift.api.valuesets;
 
+import com.facebook.drift.annotations.ThriftConstructor;
+import com.facebook.drift.annotations.ThriftEnum;
+import com.facebook.drift.annotations.ThriftEnumValue;
+import com.facebook.drift.annotations.ThriftField;
+import com.facebook.drift.annotations.ThriftStruct;
 import com.facebook.presto.connector.thrift.api.PrestoThriftBlock;
 import com.facebook.presto.spi.predicate.Marker;
 import com.facebook.presto.spi.predicate.Marker.Bound;
 import com.facebook.presto.spi.predicate.Range;
 import com.facebook.presto.spi.predicate.SortedRangeSet;
-import com.facebook.swift.codec.ThriftConstructor;
-import com.facebook.swift.codec.ThriftEnum;
-import com.facebook.swift.codec.ThriftEnumValue;
-import com.facebook.swift.codec.ThriftField;
-import com.facebook.swift.codec.ThriftStruct;
 
 import javax.annotation.Nullable;
 
 import java.util.List;
 import java.util.Objects;
 
+import static com.facebook.drift.annotations.ThriftField.Requiredness.OPTIONAL;
 import static com.facebook.presto.connector.thrift.api.PrestoThriftBlock.fromBlock;
 import static com.facebook.presto.connector.thrift.api.valuesets.PrestoThriftRangeValueSet.PrestoThriftBound.fromBound;
 import static com.facebook.presto.connector.thrift.api.valuesets.PrestoThriftRangeValueSet.PrestoThriftMarker.fromMarker;
-import static com.facebook.swift.codec.ThriftField.Requiredness.OPTIONAL;
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.ImmutableList.toImmutableList;

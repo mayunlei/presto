@@ -13,16 +13,16 @@
  */
 package com.facebook.presto.execution.buffer;
 
-import com.facebook.presto.OutputBuffers;
-import com.facebook.presto.OutputBuffers.OutputBufferId;
+import com.facebook.airlift.concurrent.ExtendedSettableFuture;
+import com.facebook.presto.execution.Lifespan;
 import com.facebook.presto.execution.StateMachine;
 import com.facebook.presto.execution.StateMachine.StateChangeListener;
-import com.facebook.presto.execution.SystemMemoryUsageListener;
 import com.facebook.presto.execution.TaskId;
+import com.facebook.presto.execution.buffer.OutputBuffers.OutputBufferId;
+import com.facebook.presto.memory.context.LocalMemoryContext;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.util.concurrent.ListenableFuture;
-import io.airlift.concurrent.ExtendedSettableFuture;
 import io.airlift.units.DataSize;
 
 import javax.annotation.concurrent.GuardedBy;
@@ -32,6 +32,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.Executor;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 import static com.facebook.presto.execution.buffer.BufferResult.emptyResults;
 import static com.facebook.presto.execution.buffer.BufferState.FAILED;
@@ -49,7 +51,7 @@ public class LazyOutputBuffer
     private final StateMachine<BufferState> state;
     private final String taskInstanceId;
     private final DataSize maxBufferSize;
-    private final SystemMemoryUsageListener systemMemoryUsageListener;
+    private final Supplier<LocalMemoryContext> systemMemoryContextSupplier;
     private final Executor executor;
 
     @GuardedBy("this")
@@ -66,7 +68,7 @@ public class LazyOutputBuffer
             String taskInstanceId,
             Executor executor,
             DataSize maxBufferSize,
-            SystemMemoryUsageListener systemMemoryUsageListener)
+            Supplier<LocalMemoryContext> systemMemoryContextSupplier)
     {
         requireNonNull(taskId, "taskId is null");
         this.taskInstanceId = requireNonNull(taskInstanceId, "taskInstanceId is null");
@@ -74,7 +76,7 @@ public class LazyOutputBuffer
         state = new StateMachine<>(taskId + "-buffer", executor, OPEN, TERMINAL_BUFFER_STATES);
         this.maxBufferSize = requireNonNull(maxBufferSize, "maxBufferSize is null");
         checkArgument(maxBufferSize.toBytes() > 0, "maxBufferSize must be at least 1");
-        this.systemMemoryUsageListener = requireNonNull(systemMemoryUsageListener, "systemMemoryUsageListener is null");
+        this.systemMemoryContextSupplier = requireNonNull(systemMemoryContextSupplier, "systemMemoryContextSupplier is null");
     }
 
     @Override
@@ -102,6 +104,18 @@ public class LazyOutputBuffer
             return 1.0;
         }
         return outputBuffer.getUtilization();
+    }
+
+    @Override
+    public boolean isOverutilized()
+    {
+        OutputBuffer outputBuffer;
+        synchronized (this) {
+            outputBuffer = delegate;
+        }
+
+        // until output buffer is initialized, readers cannot enqueue and thus cannot be blocked
+        return (outputBuffer != null) && outputBuffer.isOverutilized();
     }
 
     @Override
@@ -146,13 +160,16 @@ public class LazyOutputBuffer
                 }
                 switch (newOutputBuffers.getType()) {
                     case PARTITIONED:
-                        delegate = new PartitionedOutputBuffer(taskInstanceId, state, newOutputBuffers, maxBufferSize, systemMemoryUsageListener, executor);
+                        delegate = new PartitionedOutputBuffer(taskInstanceId, state, newOutputBuffers, maxBufferSize, systemMemoryContextSupplier, executor);
                         break;
                     case BROADCAST:
-                        delegate = new BroadcastOutputBuffer(taskInstanceId, state, maxBufferSize, systemMemoryUsageListener, executor);
+                        delegate = new BroadcastOutputBuffer(taskInstanceId, state, maxBufferSize, systemMemoryContextSupplier, executor);
                         break;
                     case ARBITRARY:
-                        delegate = new ArbitraryOutputBuffer(taskInstanceId, state, maxBufferSize, systemMemoryUsageListener, executor);
+                        delegate = new ArbitraryOutputBuffer(taskInstanceId, state, maxBufferSize, systemMemoryContextSupplier, executor);
+                        break;
+                    case DISCARDING:
+                        delegate = new DiscardingOutputBuffer(newOutputBuffers, state);
                         break;
                 }
 
@@ -194,6 +211,17 @@ public class LazyOutputBuffer
     }
 
     @Override
+    public void acknowledge(OutputBufferId bufferId, long token)
+    {
+        OutputBuffer outputBuffer;
+        synchronized (this) {
+            checkState(delegate != null, "delegate is null");
+            outputBuffer = delegate;
+        }
+        outputBuffer.acknowledge(bufferId, token);
+    }
+
+    @Override
     public void abort(OutputBufferId bufferId)
     {
         OutputBuffer outputBuffer;
@@ -210,25 +238,47 @@ public class LazyOutputBuffer
     }
 
     @Override
-    public ListenableFuture<?> enqueue(List<SerializedPage> pages)
+    public ListenableFuture<?> isFull()
     {
         OutputBuffer outputBuffer;
         synchronized (this) {
             checkState(delegate != null, "Buffer has not been initialized");
             outputBuffer = delegate;
         }
-        return outputBuffer.enqueue(pages);
+        return outputBuffer.isFull();
     }
 
     @Override
-    public ListenableFuture<?> enqueue(int partition, List<SerializedPage> pages)
+    public void registerLifespanCompletionCallback(Consumer<Lifespan> callback)
     {
         OutputBuffer outputBuffer;
         synchronized (this) {
             checkState(delegate != null, "Buffer has not been initialized");
             outputBuffer = delegate;
         }
-        return outputBuffer.enqueue(partition, pages);
+        outputBuffer.registerLifespanCompletionCallback(callback);
+    }
+
+    @Override
+    public void enqueue(Lifespan lifespan, List<SerializedPage> pages)
+    {
+        OutputBuffer outputBuffer;
+        synchronized (this) {
+            checkState(delegate != null, "Buffer has not been initialized");
+            outputBuffer = delegate;
+        }
+        outputBuffer.enqueue(lifespan, pages);
+    }
+
+    @Override
+    public void enqueue(Lifespan lifespan, int partition, List<SerializedPage> pages)
+    {
+        OutputBuffer outputBuffer;
+        synchronized (this) {
+            checkState(delegate != null, "Buffer has not been initialized");
+            outputBuffer = delegate;
+        }
+        outputBuffer.enqueue(lifespan, partition, pages);
     }
 
     @Override
@@ -286,6 +336,42 @@ public class LazyOutputBuffer
             outputBuffer = delegate;
         }
         outputBuffer.fail();
+    }
+
+    @Override
+    public void setNoMorePagesForLifespan(Lifespan lifespan)
+    {
+        OutputBuffer outputBuffer;
+        synchronized (this) {
+            checkState(delegate != null, "Buffer has not been initialized");
+            outputBuffer = delegate;
+        }
+        outputBuffer.setNoMorePagesForLifespan(lifespan);
+    }
+
+    @Override
+    public boolean isFinishedForLifespan(Lifespan lifespan)
+    {
+        OutputBuffer outputBuffer;
+        synchronized (this) {
+            checkState(delegate != null, "Buffer has not been initialized");
+            outputBuffer = delegate;
+        }
+        return outputBuffer.isFinishedForLifespan(lifespan);
+    }
+
+    @Override
+    public long getPeakMemoryUsage()
+    {
+        OutputBuffer outputBuffer;
+        synchronized (this) {
+            outputBuffer = delegate;
+        }
+
+        if (outputBuffer != null) {
+            return outputBuffer.getPeakMemoryUsage();
+        }
+        return 0;
     }
 
     private static class PendingRead

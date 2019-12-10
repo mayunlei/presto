@@ -13,6 +13,8 @@
  */
 package com.facebook.presto.eventlistener;
 
+import com.facebook.airlift.log.Logger;
+import com.facebook.presto.spi.classloader.ThreadContextClassLoader;
 import com.facebook.presto.spi.eventlistener.EventListener;
 import com.facebook.presto.spi.eventlistener.EventListenerFactory;
 import com.facebook.presto.spi.eventlistener.QueryCompletedEvent;
@@ -20,7 +22,6 @@ import com.facebook.presto.spi.eventlistener.QueryCreatedEvent;
 import com.facebook.presto.spi.eventlistener.SplitCompletedEvent;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableMap;
-import io.airlift.log.Logger;
 
 import java.io.File;
 import java.util.HashMap;
@@ -79,8 +80,10 @@ public class EventListenerManager
         EventListenerFactory eventListenerFactory = eventListenerFactories.get(name);
         checkState(eventListenerFactory != null, "Event listener %s is not registered", name);
 
-        EventListener eventListener = eventListenerFactory.create(ImmutableMap.copyOf(properties));
-        this.configuredEventListener.set(Optional.of(eventListener));
+        try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(eventListenerFactory.getClass().getClassLoader())) {
+            EventListener eventListener = eventListenerFactory.create(ImmutableMap.copyOf(properties));
+            this.configuredEventListener.set(Optional.of(eventListener));
+        }
 
         log.info("-- Loaded event listener %s --", name);
     }

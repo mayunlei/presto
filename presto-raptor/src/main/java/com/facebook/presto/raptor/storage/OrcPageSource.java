@@ -13,9 +13,9 @@
  */
 package com.facebook.presto.raptor.storage;
 
+import com.facebook.presto.memory.context.AggregatedMemoryContext;
+import com.facebook.presto.orc.OrcBatchRecordReader;
 import com.facebook.presto.orc.OrcDataSource;
-import com.facebook.presto.orc.OrcRecordReader;
-import com.facebook.presto.orc.memory.AggregatedMemoryContext;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.UpdatablePageSource;
@@ -58,7 +58,7 @@ public class OrcPageSource
 
     private final Optional<ShardRewriter> shardRewriter;
 
-    private final OrcRecordReader recordReader;
+    private final OrcBatchRecordReader recordReader;
     private final OrcDataSource orcDataSource;
 
     private final BitSet rowsToDelete;
@@ -72,11 +72,12 @@ public class OrcPageSource
     private final AggregatedMemoryContext systemMemoryContext;
 
     private int batchId;
+    private long completedPositions;
     private boolean closed;
 
     public OrcPageSource(
             Optional<ShardRewriter> shardRewriter,
-            OrcRecordReader recordReader,
+            OrcBatchRecordReader recordReader,
             OrcDataSource orcDataSource,
             List<Long> columnIds,
             List<Type> columnTypes,
@@ -131,6 +132,12 @@ public class OrcPageSource
     }
 
     @Override
+    public long getCompletedPositions()
+    {
+        return completedPositions;
+    }
+
+    @Override
     public long getReadTimeNanos()
     {
         return orcDataSource.getReadTimeNanos();
@@ -152,11 +159,13 @@ public class OrcPageSource
                 close();
                 return null;
             }
+
+            completedPositions += batchSize;
+
             long filePosition = recordReader.getFilePosition();
 
             Block[] blocks = new Block[columnIndexes.length];
             for (int fieldId = 0; fieldId < blocks.length; fieldId++) {
-                Type type = types.get(fieldId);
                 if (constantBlocks[fieldId] != null) {
                     blocks[fieldId] = constantBlocks[fieldId].getRegion(0, batchSize);
                 }
@@ -164,7 +173,7 @@ public class OrcPageSource
                     blocks[fieldId] = buildSequenceBlock(filePosition, batchSize);
                 }
                 else {
-                    blocks[fieldId] = new LazyBlock(batchSize, new OrcBlockLoader(columnIndexes[fieldId], type));
+                    blocks[fieldId] = new LazyBlock(batchSize, new OrcBlockLoader(columnIndexes[fieldId]));
                 }
             }
 
@@ -254,13 +263,11 @@ public class OrcPageSource
     {
         private final int expectedBatchId = batchId;
         private final int columnIndex;
-        private final Type type;
         private boolean loaded;
 
-        public OrcBlockLoader(int columnIndex, Type type)
+        public OrcBlockLoader(int columnIndex)
         {
             this.columnIndex = columnIndex;
-            this.type = requireNonNull(type, "type is null");
         }
 
         @Override
@@ -273,7 +280,7 @@ public class OrcPageSource
             checkState(batchId == expectedBatchId);
 
             try {
-                Block block = recordReader.readBlock(type, columnIndex);
+                Block block = recordReader.readBlock(columnIndex);
                 lazyBlock.setBlock(block);
             }
             catch (IOException e) {

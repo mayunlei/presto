@@ -18,7 +18,9 @@ import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
+import com.facebook.presto.spi.block.PageBuilderStatus;
 import com.facebook.presto.spi.block.ShortArrayBlockBuilder;
+import com.facebook.presto.spi.block.UncheckedBlock;
 
 import static com.facebook.presto.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
@@ -46,10 +48,10 @@ public final class SmallintType
     {
         int maxBlockSizeInBytes;
         if (blockBuilderStatus == null) {
-            maxBlockSizeInBytes = BlockBuilderStatus.DEFAULT_MAX_BLOCK_SIZE_IN_BYTES;
+            maxBlockSizeInBytes = PageBuilderStatus.DEFAULT_MAX_PAGE_SIZE_IN_BYTES;
         }
         else {
-            maxBlockSizeInBytes = blockBuilderStatus.getMaxBlockSizeInBytes();
+            maxBlockSizeInBytes = blockBuilderStatus.getMaxPageSizeInBytes();
         }
         return new ShortArrayBlockBuilder(
                 blockBuilderStatus,
@@ -65,7 +67,7 @@ public final class SmallintType
     @Override
     public BlockBuilder createFixedSizeBlockBuilder(int positionCount)
     {
-        return new ShortArrayBlockBuilder(new BlockBuilderStatus(), positionCount);
+        return new ShortArrayBlockBuilder(null, positionCount);
     }
 
     @Override
@@ -87,21 +89,21 @@ public final class SmallintType
             return null;
         }
 
-        return block.getShort(position, 0);
+        return block.getShort(position);
     }
 
     @Override
     public boolean equalTo(Block leftBlock, int leftPosition, Block rightBlock, int rightPosition)
     {
-        int leftValue = leftBlock.getShort(leftPosition, 0);
-        int rightValue = rightBlock.getShort(rightPosition, 0);
+        int leftValue = leftBlock.getShort(leftPosition);
+        int rightValue = rightBlock.getShort(rightPosition);
         return leftValue == rightValue;
     }
 
     @Override
     public long hash(Block block, int position)
     {
-        return hash(block.getShort(position, 0));
+        return hash(block.getShort(position));
     }
 
     @Override
@@ -109,8 +111,8 @@ public final class SmallintType
     {
         // WARNING: the correctness of InCodeGenerator is dependent on the implementation of this
         // function being the equivalence of internal long representation.
-        short leftValue = leftBlock.getShort(leftPosition, 0);
-        short rightValue = rightBlock.getShort(rightPosition, 0);
+        short leftValue = leftBlock.getShort(leftPosition);
+        short rightValue = rightBlock.getShort(rightPosition);
         return Short.compare(leftValue, rightValue);
     }
 
@@ -121,14 +123,20 @@ public final class SmallintType
             blockBuilder.appendNull();
         }
         else {
-            blockBuilder.writeShort(block.getShort(position, 0)).closeEntry();
+            blockBuilder.writeShort(block.getShort(position)).closeEntry();
         }
     }
 
     @Override
     public long getLong(Block block, int position)
     {
-        return (long) block.getShort(position, 0);
+        return (long) block.getShort(position);
+    }
+
+    @Override
+    public long getLongUnchecked(UncheckedBlock block, int internalPosition)
+    {
+        return (long) block.getShortUnchecked(internalPosition);
     }
 
     @Override

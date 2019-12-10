@@ -13,12 +13,13 @@
  */
 package com.facebook.presto.orc.writer;
 
+import com.facebook.presto.orc.OrcEncoding;
 import com.facebook.presto.orc.checkpoint.BooleanStreamCheckpoint;
 import com.facebook.presto.orc.checkpoint.DecimalStreamCheckpoint;
 import com.facebook.presto.orc.checkpoint.LongStreamCheckpoint;
 import com.facebook.presto.orc.metadata.ColumnEncoding;
+import com.facebook.presto.orc.metadata.CompressedMetadataWriter;
 import com.facebook.presto.orc.metadata.CompressionKind;
-import com.facebook.presto.orc.metadata.MetadataWriter;
 import com.facebook.presto.orc.metadata.RowGroupIndex;
 import com.facebook.presto.orc.metadata.Stream;
 import com.facebook.presto.orc.metadata.Stream.StreamKind;
@@ -28,8 +29,8 @@ import com.facebook.presto.orc.metadata.statistics.ShortDecimalStatisticsBuilder
 import com.facebook.presto.orc.stream.DecimalOutputStream;
 import com.facebook.presto.orc.stream.LongOutputStream;
 import com.facebook.presto.orc.stream.LongOutputStreamV2;
-import com.facebook.presto.orc.stream.OutputDataStream;
 import com.facebook.presto.orc.stream.PresentOutputStream;
+import com.facebook.presto.orc.stream.StreamDataOutput;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.type.DecimalType;
 import com.facebook.presto.spi.type.Decimals;
@@ -37,7 +38,6 @@ import com.facebook.presto.spi.type.Type;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import io.airlift.slice.Slice;
-import io.airlift.slice.SliceOutput;
 import org.openjdk.jol.info.ClassLayout;
 
 import java.io.IOException;
@@ -47,6 +47,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import static com.facebook.presto.orc.OrcEncoding.DWRF;
 import static com.facebook.presto.orc.metadata.ColumnEncoding.ColumnEncodingKind.DIRECT_V2;
 import static com.facebook.presto.orc.metadata.CompressionKind.NONE;
 import static com.facebook.presto.orc.metadata.Stream.StreamKind.SECONDARY;
@@ -67,16 +68,17 @@ public class DecimalColumnWriter
     private final PresentOutputStream presentStream;
 
     private final List<ColumnStatistics> rowGroupColumnStatistics = new ArrayList<>();
+    private long columnStatisticsRetainedSizeInBytes;
 
     private ShortDecimalStatisticsBuilder shortDecimalStatisticsBuilder;
     private LongDecimalStatisticsBuilder longDecimalStatisticsBuilder;
 
     private boolean closed;
 
-    public DecimalColumnWriter(int column, Type type, CompressionKind compression, int bufferSize, boolean isDwrf)
+    public DecimalColumnWriter(int column, Type type, CompressionKind compression, int bufferSize, OrcEncoding orcEncoding)
     {
         checkArgument(column >= 0, "column is negative");
-        checkArgument(!isDwrf, "DWRF does not support %s type", type);
+        checkArgument(orcEncoding != DWRF, "DWRF does not support %s type", type);
         this.column = column;
         this.type = (DecimalType) requireNonNull(type, "type is null");
         this.compressed = requireNonNull(compression, "compression is null") != NONE;
@@ -158,6 +160,7 @@ public class DecimalColumnWriter
             longDecimalStatisticsBuilder = new LongDecimalStatisticsBuilder();
         }
         rowGroupColumnStatistics.add(statistics);
+        columnStatisticsRetainedSizeInBytes += statistics.getRetainedSizeInBytes();
 
         return ImmutableMap.of(column, statistics);
     }
@@ -179,7 +182,7 @@ public class DecimalColumnWriter
     }
 
     @Override
-    public List<Stream> writeIndexStreams(SliceOutput outputStream, MetadataWriter metadataWriter)
+    public List<StreamDataOutput> getIndexStreams(CompressedMetadataWriter metadataWriter)
             throws IOException
     {
         checkState(closed);
@@ -199,8 +202,9 @@ public class DecimalColumnWriter
             rowGroupIndexes.add(new RowGroupIndex(positions, columnStatistics));
         }
 
-        int length = metadataWriter.writeRowIndexes(outputStream, rowGroupIndexes.build());
-        return ImmutableList.of(new Stream(column, StreamKind.ROW_INDEX, length, false));
+        Slice slice = metadataWriter.writeRowIndexes(rowGroupIndexes.build());
+        Stream stream = new Stream(column, StreamKind.ROW_INDEX, slice.length(), false);
+        return ImmutableList.of(new StreamDataOutput(slice, stream));
     }
 
     private static List<Integer> createDecimalColumnPositionList(
@@ -217,14 +221,14 @@ public class DecimalColumnWriter
     }
 
     @Override
-    public List<OutputDataStream> getOutputDataStreams()
+    public List<StreamDataOutput> getDataStreams()
     {
         checkState(closed);
 
-        ImmutableList.Builder<OutputDataStream> outputDataStreams = ImmutableList.builder();
-        outputDataStreams.add(new OutputDataStream(sliceOutput -> presentStream.writeDataStreams(column, sliceOutput), presentStream.getBufferedBytes()));
-        outputDataStreams.add(new OutputDataStream(sliceOutput -> dataStream.writeDataStreams(column, sliceOutput), dataStream.getBufferedBytes()));
-        outputDataStreams.add(new OutputDataStream(sliceOutput -> scaleStream.writeDataStreams(column, sliceOutput), scaleStream.getBufferedBytes()));
+        ImmutableList.Builder<StreamDataOutput> outputDataStreams = ImmutableList.builder();
+        presentStream.getStreamDataOutput(column).ifPresent(outputDataStreams::add);
+        outputDataStreams.add(dataStream.getStreamDataOutput(column));
+        outputDataStreams.add(scaleStream.getStreamDataOutput(column));
         return outputDataStreams.build();
     }
 
@@ -237,8 +241,7 @@ public class DecimalColumnWriter
     @Override
     public long getRetainedBytes()
     {
-        // NOTE: we do not include stats because they should be small and it would be annoying to calculate the size
-        return INSTANCE_SIZE + dataStream.getRetainedBytes() + scaleStream.getRetainedBytes() + presentStream.getRetainedBytes();
+        return INSTANCE_SIZE + dataStream.getRetainedBytes() + scaleStream.getRetainedBytes() + presentStream.getRetainedBytes() + columnStatisticsRetainedSizeInBytes;
     }
 
     @Override
@@ -249,6 +252,7 @@ public class DecimalColumnWriter
         scaleStream.reset();
         presentStream.reset();
         rowGroupColumnStatistics.clear();
+        columnStatisticsRetainedSizeInBytes = 0;
         shortDecimalStatisticsBuilder = new ShortDecimalStatisticsBuilder(this.type.getScale());
         longDecimalStatisticsBuilder = new LongDecimalStatisticsBuilder();
     }

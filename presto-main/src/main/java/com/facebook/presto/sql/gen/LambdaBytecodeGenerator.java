@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.sql.gen;
 
+import com.facebook.presto.bytecode.Access;
 import com.facebook.presto.bytecode.BytecodeBlock;
 import com.facebook.presto.bytecode.BytecodeNode;
 import com.facebook.presto.bytecode.ClassDefinition;
@@ -23,51 +24,50 @@ import com.facebook.presto.bytecode.ParameterizedType;
 import com.facebook.presto.bytecode.Scope;
 import com.facebook.presto.bytecode.Variable;
 import com.facebook.presto.bytecode.expression.BytecodeExpression;
-import com.facebook.presto.bytecode.expression.BytecodeExpressions;
-import com.facebook.presto.metadata.FunctionRegistry;
+import com.facebook.presto.metadata.Metadata;
+import com.facebook.presto.operator.aggregation.AccumulatorCompiler;
+import com.facebook.presto.operator.aggregation.LambdaProvider;
 import com.facebook.presto.spi.ConnectorSession;
-import com.facebook.presto.sql.relational.CallExpression;
-import com.facebook.presto.sql.relational.ConstantExpression;
-import com.facebook.presto.sql.relational.InputReferenceExpression;
-import com.facebook.presto.sql.relational.LambdaDefinitionExpression;
-import com.facebook.presto.sql.relational.RowExpression;
-import com.facebook.presto.sql.relational.RowExpressionVisitor;
-import com.facebook.presto.sql.relational.VariableReferenceExpression;
-import com.facebook.presto.util.Reflection;
+import com.facebook.presto.spi.function.SqlFunctionProperties;
+import com.facebook.presto.spi.relation.CallExpression;
+import com.facebook.presto.spi.relation.ConstantExpression;
+import com.facebook.presto.spi.relation.InputReferenceExpression;
+import com.facebook.presto.spi.relation.LambdaDefinitionExpression;
+import com.facebook.presto.spi.relation.RowExpression;
+import com.facebook.presto.spi.relation.RowExpressionVisitor;
+import com.facebook.presto.spi.relation.SpecialFormExpression;
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.google.common.base.VerifyException;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.primitives.Primitives;
 import org.objectweb.asm.Handle;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.Type;
 
-import java.lang.invoke.MethodHandle;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 
-import static com.facebook.presto.bytecode.Access.FINAL;
 import static com.facebook.presto.bytecode.Access.PRIVATE;
 import static com.facebook.presto.bytecode.Access.PUBLIC;
-import static com.facebook.presto.bytecode.Access.STATIC;
 import static com.facebook.presto.bytecode.Access.a;
 import static com.facebook.presto.bytecode.Parameter.arg;
 import static com.facebook.presto.bytecode.ParameterizedType.type;
-import static com.facebook.presto.bytecode.expression.BytecodeExpressions.constantClass;
 import static com.facebook.presto.bytecode.expression.BytecodeExpressions.constantFalse;
-import static com.facebook.presto.bytecode.expression.BytecodeExpressions.constantString;
-import static com.facebook.presto.bytecode.expression.BytecodeExpressions.getStatic;
 import static com.facebook.presto.bytecode.expression.BytecodeExpressions.invokeDynamic;
-import static com.facebook.presto.bytecode.expression.BytecodeExpressions.invokeStatic;
-import static com.facebook.presto.bytecode.expression.BytecodeExpressions.newArray;
-import static com.facebook.presto.bytecode.expression.BytecodeExpressions.setStatic;
 import static com.facebook.presto.spi.StandardErrorCode.COMPILER_ERROR;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
 import static com.facebook.presto.sql.gen.BytecodeUtils.boxPrimitiveIfNecessary;
 import static com.facebook.presto.sql.gen.BytecodeUtils.unboxPrimitiveIfNecessary;
 import static com.facebook.presto.sql.gen.LambdaCapture.LAMBDA_CAPTURE_METHOD;
+import static com.facebook.presto.sql.gen.LambdaExpressionExtractor.extractLambdaExpressions;
+import static com.facebook.presto.util.CompilerUtils.defineClass;
+import static com.facebook.presto.util.CompilerUtils.makeClassName;
 import static com.facebook.presto.util.Failures.checkCondition;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static java.util.Objects.requireNonNull;
@@ -80,17 +80,59 @@ public class LambdaBytecodeGenerator
     {
     }
 
+    public static Map<LambdaDefinitionExpression, CompiledLambda> generateMethodsForLambda(
+            ClassDefinition containerClassDefinition,
+            CallSiteBinder callSiteBinder,
+            CachedInstanceBinder cachedInstanceBinder,
+            RowExpression expression,
+            Metadata metadata,
+            SqlFunctionProperties sqlFunctionProperties)
+    {
+        return generateMethodsForLambda(containerClassDefinition, callSiteBinder, cachedInstanceBinder, expression, metadata, sqlFunctionProperties, "");
+    }
+
+    public static Map<LambdaDefinitionExpression, CompiledLambda> generateMethodsForLambda(
+            ClassDefinition containerClassDefinition,
+            CallSiteBinder callSiteBinder,
+            CachedInstanceBinder cachedInstanceBinder,
+            RowExpression expression,
+            Metadata metadata,
+            SqlFunctionProperties sqlFunctionProperties,
+            String methodNamePrefix)
+    {
+        Set<LambdaDefinitionExpression> lambdaExpressions = ImmutableSet.copyOf(extractLambdaExpressions(expression));
+        ImmutableMap.Builder<LambdaDefinitionExpression, CompiledLambda> compiledLambdaMap = ImmutableMap.builder();
+
+        int counter = 0;
+        for (LambdaDefinitionExpression lambdaExpression : lambdaExpressions) {
+            CompiledLambda compiledLambda = LambdaBytecodeGenerator.preGenerateLambdaExpression(
+                    lambdaExpression,
+                    methodNamePrefix + "lambda_" + counter,
+                    containerClassDefinition,
+                    compiledLambdaMap.build(),
+                    callSiteBinder,
+                    cachedInstanceBinder,
+                    metadata,
+                    sqlFunctionProperties);
+            compiledLambdaMap.put(lambdaExpression, compiledLambda);
+            counter++;
+        }
+
+        return compiledLambdaMap.build();
+    }
+
     /**
      * @return a MethodHandle field that represents the lambda expression
      */
     public static CompiledLambda preGenerateLambdaExpression(
             LambdaDefinitionExpression lambdaExpression,
-            String fieldName,
+            String methodName,
             ClassDefinition classDefinition,
-            PreGeneratedExpressions preGeneratedExpressions,
+            Map<LambdaDefinitionExpression, CompiledLambda> compiledLambdaMap,
             CallSiteBinder callSiteBinder,
             CachedInstanceBinder cachedInstanceBinder,
-            FunctionRegistry functionRegistry)
+            Metadata metadata,
+            SqlFunctionProperties sqlFunctionProperties)
     {
         ImmutableList.Builder<Parameter> parameters = ImmutableList.builder();
         ImmutableMap.Builder<String, ParameterAndType> parameterMapBuilder = ImmutableMap.builder();
@@ -105,71 +147,53 @@ public class LambdaBytecodeGenerator
         }
 
         RowExpressionCompiler innerExpressionCompiler = new RowExpressionCompiler(
+                classDefinition,
                 callSiteBinder,
                 cachedInstanceBinder,
                 variableReferenceCompiler(parameterMapBuilder.build()),
-                functionRegistry,
-                preGeneratedExpressions);
+                metadata,
+                sqlFunctionProperties,
+                compiledLambdaMap);
 
-        return defineLambdaMethodAndField(
+        return defineLambdaMethod(
                 innerExpressionCompiler,
                 classDefinition,
-                fieldName,
+                methodName,
                 parameters.build(),
                 lambdaExpression);
     }
 
-    private static CompiledLambda defineLambdaMethodAndField(
+    private static CompiledLambda defineLambdaMethod(
             RowExpressionCompiler innerExpressionCompiler,
             ClassDefinition classDefinition,
-            String fieldAndMethodName,
+            String methodName,
             List<Parameter> inputParameters,
             LambdaDefinitionExpression lambda)
     {
         checkCondition(inputParameters.size() <= 254, NOT_SUPPORTED, "Too many arguments for lambda expression");
         Class<?> returnType = Primitives.wrap(lambda.getBody().getType().getJavaType());
-        MethodDefinition method = classDefinition.declareMethod(a(PUBLIC), fieldAndMethodName, type(returnType), inputParameters);
+        MethodDefinition method = classDefinition.declareMethod(a(PUBLIC), methodName, type(returnType), inputParameters);
 
         Scope scope = method.getScope();
         Variable wasNull = scope.declareVariable(boolean.class, "wasNull");
-        BytecodeNode compiledBody = innerExpressionCompiler.compile(lambda.getBody(), scope);
+        BytecodeNode compiledBody = innerExpressionCompiler.compile(lambda.getBody(), scope, Optional.empty());
         method.getBody()
                 .putVariable(wasNull, false)
                 .append(compiledBody)
                 .append(boxPrimitiveIfNecessary(scope, returnType))
                 .ret(returnType);
 
-        FieldDefinition staticField = classDefinition.declareField(a(PRIVATE, STATIC, FINAL), fieldAndMethodName, type(MethodHandle.class));
-        FieldDefinition instanceField = classDefinition.declareField(a(PRIVATE, FINAL), "binded_" + fieldAndMethodName, type(MethodHandle.class));
-
-        classDefinition.getClassInitializer().getBody()
-                .append(setStatic(
-                        staticField,
-                        invokeStatic(
-                                Reflection.class,
-                                "methodHandle",
-                                MethodHandle.class,
-                                constantClass(classDefinition.getType()),
-                                constantString(fieldAndMethodName),
-                                newArray(
-                                        type(Class[].class),
-                                        inputParameters.stream()
-                                                .map(Parameter::getType)
-                                                .map(BytecodeExpressions::constantClass)
-                                                .collect(toImmutableList())))));
-
         Handle lambdaAsmHandle = new Handle(
                 Opcodes.H_INVOKEVIRTUAL,
                 method.getThis().getType().getClassName(),
                 method.getName(),
-                method.getMethodDescriptor());
+                method.getMethodDescriptor(),
+                false);
 
         return new CompiledLambda(
                 lambdaAsmHandle,
                 method.getReturnType(),
-                method.getParameterTypes(),
-                staticField,
-                instanceField);
+                method.getParameterTypes());
     }
 
     public static BytecodeNode generateLambda(
@@ -193,7 +217,7 @@ public class LambdaBytecodeGenerator
         for (RowExpression captureExpression : captureExpressions) {
             Class<?> valueType = Primitives.wrap(captureExpression.getType().getJavaType());
             Variable valueVariable = scope.createTempVariable(valueType);
-            block.append(context.generate(captureExpression));
+            block.append(context.generate(captureExpression, Optional.empty()));
             block.append(boxPrimitiveIfNecessary(scope, valueType));
             block.putVariable(valueVariable);
             block.append(wasNull.set(constantFalse()));
@@ -223,6 +247,80 @@ public class LambdaBytecodeGenerator
                         type(lambdaInterface),
                         captureVariables));
         return block;
+    }
+
+    public static Class<? extends LambdaProvider> compileLambdaProvider(LambdaDefinitionExpression lambdaExpression, Metadata metadata, SqlFunctionProperties sqlFunctionProperties, Class lambdaInterface)
+    {
+        ClassDefinition lambdaProviderClassDefinition = new ClassDefinition(
+                a(PUBLIC, Access.FINAL),
+                makeClassName("LambdaProvider"),
+                type(Object.class),
+                type(LambdaProvider.class));
+
+        FieldDefinition sessionField = lambdaProviderClassDefinition.declareField(a(PRIVATE), "session", ConnectorSession.class);
+
+        CallSiteBinder callSiteBinder = new CallSiteBinder();
+        CachedInstanceBinder cachedInstanceBinder = new CachedInstanceBinder(lambdaProviderClassDefinition, callSiteBinder);
+
+        Map<LambdaDefinitionExpression, CompiledLambda> compiledLambdaMap = generateMethodsForLambda(
+                lambdaProviderClassDefinition,
+                callSiteBinder,
+                cachedInstanceBinder,
+                lambdaExpression,
+                metadata,
+                sqlFunctionProperties);
+
+        MethodDefinition method = lambdaProviderClassDefinition.declareMethod(
+                a(PUBLIC),
+                "getLambda",
+                type(Object.class),
+                ImmutableList.of());
+
+        Scope scope = method.getScope();
+        BytecodeBlock body = method.getBody();
+        scope.declareVariable("wasNull", body, constantFalse());
+        scope.declareVariable("session", body, method.getThis().getField(sessionField));
+
+        RowExpressionCompiler rowExpressionCompiler = new RowExpressionCompiler(
+                lambdaProviderClassDefinition,
+                callSiteBinder,
+                cachedInstanceBinder,
+                variableReferenceCompiler(ImmutableMap.of()),
+                metadata,
+                sqlFunctionProperties,
+                compiledLambdaMap);
+
+        BytecodeGeneratorContext generatorContext = new BytecodeGeneratorContext(
+                rowExpressionCompiler,
+                scope,
+                callSiteBinder,
+                cachedInstanceBinder,
+                metadata.getFunctionManager());
+
+        body.append(
+                generateLambda(
+                        generatorContext,
+                        ImmutableList.of(),
+                        compiledLambdaMap.get(lambdaExpression),
+                        lambdaInterface))
+                .retObject();
+
+        // constructor
+        Parameter sessionParameter = arg("session", ConnectorSession.class);
+
+        MethodDefinition constructorDefinition = lambdaProviderClassDefinition.declareConstructor(a(PUBLIC), sessionParameter);
+        BytecodeBlock constructorBody = constructorDefinition.getBody();
+        Variable constructorThisVariable = constructorDefinition.getThis();
+
+        constructorBody.comment("super();")
+                .append(constructorThisVariable)
+                .invokeConstructor(Object.class)
+                .append(constructorThisVariable.setField(sessionField, sessionParameter));
+
+        cachedInstanceBinder.generateInitializations(constructorThisVariable, constructorBody);
+        constructorBody.ret();
+
+        return defineClass(lambdaProviderClassDefinition, LambdaProvider.class, callSiteBinder.getBindings(), AccumulatorCompiler.class.getClassLoader());
     }
 
     private static Method getSingleApplyMethod(Class lambdaFunctionInterface)
@@ -275,15 +373,17 @@ public class LambdaBytecodeGenerator
                         .append(parameter)
                         .append(unboxPrimitiveIfNecessary(context, type));
             }
+
+            @Override
+            public BytecodeNode visitSpecialForm(SpecialFormExpression specialForm, Scope context)
+            {
+                throw new UnsupportedOperationException();
+            }
         };
     }
 
     static class CompiledLambda
     {
-        private final FieldDefinition staticField;
-        // the instance field will be binded to "this" in constructor
-        private final FieldDefinition instanceField;
-
         // lambda method information
         private final Handle lambdaAsmHandle;
         private final ParameterizedType returnType;
@@ -292,12 +392,8 @@ public class LambdaBytecodeGenerator
         public CompiledLambda(
                 Handle lambdaAsmHandle,
                 ParameterizedType returnType,
-                List<ParameterizedType> parameterTypes,
-                FieldDefinition staticField,
-                FieldDefinition instanceField)
+                List<ParameterizedType> parameterTypes)
         {
-            this.staticField = requireNonNull(staticField, "staticField is null");
-            this.instanceField = requireNonNull(instanceField, "instanceField is null");
             this.lambdaAsmHandle = requireNonNull(lambdaAsmHandle, "lambdaMethodAsmHandle is null");
             this.returnType = requireNonNull(returnType, "returnType is null");
             this.parameterTypes = ImmutableList.copyOf(requireNonNull(parameterTypes, "returnType is null"));
@@ -316,19 +412,6 @@ public class LambdaBytecodeGenerator
         public List<ParameterizedType> getParameterTypes()
         {
             return parameterTypes;
-        }
-
-        public FieldDefinition getInstanceField()
-        {
-            return instanceField;
-        }
-
-        public void generateInitialization(Variable thisVariable, BytecodeBlock block)
-        {
-            block.append(
-                    thisVariable.setField(
-                            instanceField,
-                            getStatic(staticField).invoke("bindTo", MethodHandle.class, thisVariable.cast(Object.class))));
         }
     }
 }

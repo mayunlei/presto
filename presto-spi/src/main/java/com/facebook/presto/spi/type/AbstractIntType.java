@@ -17,6 +17,8 @@ import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
 import com.facebook.presto.spi.block.IntArrayBlockBuilder;
+import com.facebook.presto.spi.block.PageBuilderStatus;
+import com.facebook.presto.spi.block.UncheckedBlock;
 import io.airlift.slice.Slice;
 
 import static java.lang.Long.rotateLeft;
@@ -51,7 +53,13 @@ public abstract class AbstractIntType
     @Override
     public final long getLong(Block block, int position)
     {
-        return block.getInt(position, 0);
+        return block.getInt(position);
+    }
+
+    @Override
+    public final long getLongUnchecked(UncheckedBlock block, int internalPosition)
+    {
+        return block.getIntUnchecked(internalPosition);
     }
 
     @Override
@@ -73,22 +81,22 @@ public abstract class AbstractIntType
             blockBuilder.appendNull();
         }
         else {
-            blockBuilder.writeInt(block.getInt(position, 0)).closeEntry();
+            blockBuilder.writeInt(block.getInt(position)).closeEntry();
         }
     }
 
     @Override
     public boolean equalTo(Block leftBlock, int leftPosition, Block rightBlock, int rightPosition)
     {
-        int leftValue = leftBlock.getInt(leftPosition, 0);
-        int rightValue = rightBlock.getInt(rightPosition, 0);
+        int leftValue = leftBlock.getInt(leftPosition);
+        int rightValue = rightBlock.getInt(rightPosition);
         return leftValue == rightValue;
     }
 
     @Override
     public long hash(Block block, int position)
     {
-        return hash(block.getInt(position, 0));
+        return hash(block.getInt(position));
     }
 
     @Override
@@ -96,8 +104,8 @@ public abstract class AbstractIntType
     {
         // WARNING: the correctness of InCodeGenerator is dependent on the implementation of this
         // function being the equivalence of internal long representation.
-        int leftValue = leftBlock.getInt(leftPosition, 0);
-        int rightValue = rightBlock.getInt(rightPosition, 0);
+        int leftValue = leftBlock.getInt(leftPosition);
+        int rightValue = rightBlock.getInt(rightPosition);
         return Integer.compare(leftValue, rightValue);
     }
 
@@ -106,10 +114,10 @@ public abstract class AbstractIntType
     {
         int maxBlockSizeInBytes;
         if (blockBuilderStatus == null) {
-            maxBlockSizeInBytes = BlockBuilderStatus.DEFAULT_MAX_BLOCK_SIZE_IN_BYTES;
+            maxBlockSizeInBytes = PageBuilderStatus.DEFAULT_MAX_PAGE_SIZE_IN_BYTES;
         }
         else {
-            maxBlockSizeInBytes = blockBuilderStatus.getMaxBlockSizeInBytes();
+            maxBlockSizeInBytes = blockBuilderStatus.getMaxPageSizeInBytes();
         }
         return new IntArrayBlockBuilder(
                 blockBuilderStatus,
@@ -125,7 +133,7 @@ public abstract class AbstractIntType
     @Override
     public final BlockBuilder createFixedSizeBlockBuilder(int positionCount)
     {
-        return new IntArrayBlockBuilder(new BlockBuilderStatus(), positionCount);
+        return new IntArrayBlockBuilder(null, positionCount);
     }
 
     public static long hash(int value)

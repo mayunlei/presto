@@ -14,19 +14,28 @@
 package com.facebook.presto.sql.planner.iterative.rule.test;
 
 import com.facebook.presto.Session;
-import com.facebook.presto.connector.ConnectorId;
-import com.facebook.presto.cost.CostCalculator;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.security.AccessControl;
+import com.facebook.presto.spi.ConnectorId;
+import com.facebook.presto.spi.Plugin;
+import com.facebook.presto.split.PageSourceManager;
+import com.facebook.presto.split.SplitManager;
+import com.facebook.presto.sql.parser.SqlParser;
+import com.facebook.presto.sql.planner.assertions.OptimizerAssert;
 import com.facebook.presto.sql.planner.iterative.Rule;
+import com.facebook.presto.sql.planner.optimizations.PlanOptimizer;
 import com.facebook.presto.testing.LocalQueryRunner;
 import com.facebook.presto.tpch.TpchConnectorFactory;
 import com.facebook.presto.transaction.TransactionManager;
 import com.google.common.collect.ImmutableMap;
 
 import java.io.Closeable;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 import static com.facebook.presto.testing.TestingSession.testSessionBuilder;
+import static java.util.Collections.emptyList;
 
 public class RuleTester
         implements Closeable
@@ -35,34 +44,66 @@ public class RuleTester
     public static final ConnectorId CONNECTOR_ID = new ConnectorId(CATALOG_ID);
 
     private final Metadata metadata;
-    private final CostCalculator costCalculator;
     private final Session session;
     private final LocalQueryRunner queryRunner;
     private final TransactionManager transactionManager;
+    private final SplitManager splitManager;
+    private final PageSourceManager pageSourceManager;
     private final AccessControl accessControl;
+    private final SqlParser sqlParser;
 
     public RuleTester()
     {
-        session = testSessionBuilder()
+        this(emptyList());
+    }
+
+    public RuleTester(List<Plugin> plugins)
+    {
+        this(plugins, ImmutableMap.of());
+    }
+
+    public RuleTester(List<Plugin> plugins, Map<String, String> sessionProperties)
+    {
+        this(plugins, sessionProperties, Optional.empty());
+    }
+
+    public RuleTester(List<Plugin> plugins, Map<String, String> sessionProperties, Optional<Integer> nodeCountForStats)
+    {
+        Session.SessionBuilder sessionBuilder = testSessionBuilder()
                 .setCatalog(CATALOG_ID)
                 .setSchema("tiny")
-                .setSystemProperty("task_concurrency", "1") // these tests don't handle exchanges from local parallel
-                .build();
+                .setSystemProperty("task_concurrency", "1"); // these tests don't handle exchanges from local parallel
 
-        queryRunner = new LocalQueryRunner(session);
+        for (Map.Entry<String, String> entry : sessionProperties.entrySet()) {
+            sessionBuilder.setSystemProperty(entry.getKey(), entry.getValue());
+        }
+
+        session = sessionBuilder.build();
+
+        queryRunner = nodeCountForStats
+                .map(nodeCount -> LocalQueryRunner.queryRunnerWithFakeNodeCountForStats(session, nodeCount))
+                .orElseGet(() -> new LocalQueryRunner(session));
         queryRunner.createCatalog(session.getCatalog().get(),
                 new TpchConnectorFactory(1),
                 ImmutableMap.of());
+        plugins.stream().forEach(queryRunner::installPlugin);
 
         this.metadata = queryRunner.getMetadata();
-        this.costCalculator = queryRunner.getCostCalculator();
         this.transactionManager = queryRunner.getTransactionManager();
+        this.splitManager = queryRunner.getSplitManager();
+        this.pageSourceManager = queryRunner.getPageSourceManager();
         this.accessControl = queryRunner.getAccessControl();
+        this.sqlParser = queryRunner.getSqlParser();
     }
 
     public RuleAssert assertThat(Rule rule)
     {
-        return new RuleAssert(metadata, costCalculator, session, rule, transactionManager, accessControl);
+        return new RuleAssert(metadata, queryRunner.getStatsCalculator(), queryRunner.getEstimatedExchangesCostCalculator(), session, rule, transactionManager, accessControl);
+    }
+
+    public OptimizerAssert assertThat(PlanOptimizer optimizer)
+    {
+        return new OptimizerAssert(metadata, queryRunner.getStatsCalculator(), session, optimizer, transactionManager, accessControl);
     }
 
     @Override
@@ -74,6 +115,21 @@ public class RuleTester
     public Metadata getMetadata()
     {
         return metadata;
+    }
+
+    public SplitManager getSplitManager()
+    {
+        return splitManager;
+    }
+
+    public PageSourceManager getPageSourceManager()
+    {
+        return pageSourceManager;
+    }
+
+    public SqlParser getSqlParser()
+    {
+        return sqlParser;
     }
 
     public ConnectorId getCurrentConnectorId()

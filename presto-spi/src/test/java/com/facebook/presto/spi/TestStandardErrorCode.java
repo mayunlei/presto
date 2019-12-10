@@ -19,10 +19,10 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Set;
 
+import static com.facebook.airlift.testing.Assertions.assertGreaterThan;
+import static com.facebook.airlift.testing.Assertions.assertLessThan;
 import static com.facebook.presto.spi.StandardErrorCode.GENERIC_INSUFFICIENT_RESOURCES;
 import static com.facebook.presto.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
-import static io.airlift.testing.Assertions.assertGreaterThan;
-import static io.airlift.testing.Assertions.assertLessThan;
 import static java.util.Arrays.asList;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertTrue;
@@ -51,7 +51,6 @@ public class TestStandardErrorCode
 
     @Test
     public void testOrdering()
-            throws Exception
     {
         Iterator<StandardErrorCode> iterator = asList(StandardErrorCode.values()).iterator();
 

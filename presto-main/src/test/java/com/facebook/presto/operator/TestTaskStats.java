@@ -13,9 +13,9 @@
  */
 package com.facebook.presto.operator;
 
+import com.facebook.airlift.json.JsonCodec;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
-import io.airlift.json.JsonCodec;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 import org.joda.time.DateTime;
@@ -50,9 +50,9 @@ public class TestTaskStats
             new DataSize(12, BYTE),
             new DataSize(13, BYTE),
             new DataSize(14, BYTE),
+            26,
             new Duration(15, NANOSECONDS),
             new Duration(16, NANOSECONDS),
-            new Duration(17, NANOSECONDS),
             new Duration(18, NANOSECONDS),
             false,
             ImmutableSet.of(),
@@ -65,6 +65,11 @@ public class TestTaskStats
 
             new DataSize(23, BYTE),
             24,
+
+            new DataSize(25, BYTE),
+
+            26,
+            new Duration(27, NANOSECONDS),
 
             ImmutableList.of(TestPipelineStats.EXPECTED));
 
@@ -97,14 +102,14 @@ public class TestTaskStats
         assertEquals(actual.getBlockedDrivers(), 24);
         assertEquals(actual.getCompletedDrivers(), 10);
 
-        assertEquals(actual.getCumulativeMemory(), 11.0);
-        assertEquals(actual.getMemoryReservation(), new DataSize(12, BYTE));
+        assertEquals(actual.getCumulativeUserMemory(), 11.0);
+        assertEquals(actual.getUserMemoryReservation(), new DataSize(12, BYTE));
         assertEquals(actual.getRevocableMemoryReservation(), new DataSize(13, BYTE));
         assertEquals(actual.getSystemMemoryReservation(), new DataSize(14, BYTE));
+        assertEquals(actual.getPeakTotalMemoryInBytes(), 26);
 
         assertEquals(actual.getTotalScheduledTime(), new Duration(15, NANOSECONDS));
         assertEquals(actual.getTotalCpuTime(), new Duration(16, NANOSECONDS));
-        assertEquals(actual.getTotalUserTime(), new Duration(17, NANOSECONDS));
         assertEquals(actual.getTotalBlockedTime(), new Duration(18, NANOSECONDS));
 
         assertEquals(actual.getRawInputDataSize(), new DataSize(19, BYTE));
@@ -115,6 +120,8 @@ public class TestTaskStats
 
         assertEquals(actual.getOutputDataSize(), new DataSize(23, BYTE));
         assertEquals(actual.getOutputPositions(), 24);
+
+        assertEquals(actual.getPhysicalWrittenDataSize(), new DataSize(25, BYTE));
 
         assertEquals(actual.getPipelines().size(), 1);
         assertExpectedPipelineStats(actual.getPipelines().get(0));

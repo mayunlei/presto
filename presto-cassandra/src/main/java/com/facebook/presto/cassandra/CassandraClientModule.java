@@ -14,7 +14,6 @@
 package com.facebook.presto.cassandra;
 
 import com.datastax.driver.core.Cluster;
-import com.datastax.driver.core.ProtocolVersion;
 import com.datastax.driver.core.QueryOptions;
 import com.datastax.driver.core.SocketOptions;
 import com.datastax.driver.core.policies.ConstantSpeculativeExecutionPolicy;
@@ -24,11 +23,11 @@ import com.datastax.driver.core.policies.LoadBalancingPolicy;
 import com.datastax.driver.core.policies.RoundRobinPolicy;
 import com.datastax.driver.core.policies.TokenAwarePolicy;
 import com.datastax.driver.core.policies.WhiteListPolicy;
+import com.facebook.airlift.json.JsonCodec;
 import com.google.inject.Binder;
 import com.google.inject.Module;
 import com.google.inject.Provides;
 import com.google.inject.Scopes;
-import io.airlift.json.JsonCodec;
 
 import javax.inject.Singleton;
 
@@ -36,9 +35,9 @@ import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.List;
 
+import static com.facebook.airlift.configuration.ConfigBinder.configBinder;
+import static com.facebook.airlift.json.JsonCodecBinder.jsonCodecBinder;
 import static com.google.common.base.Preconditions.checkArgument;
-import static io.airlift.configuration.ConfigBinder.configBinder;
-import static io.airlift.json.JsonCodecBinder.jsonCodecBinder;
 import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
 
@@ -61,8 +60,9 @@ public class CassandraClientModule
         binder.bind(CassandraSplitManager.class).in(Scopes.SINGLETON);
         binder.bind(CassandraTokenSplitManager.class).in(Scopes.SINGLETON);
         binder.bind(CassandraRecordSetProvider.class).in(Scopes.SINGLETON);
-        binder.bind(CassandraConnectorRecordSinkProvider.class).in(Scopes.SINGLETON);
+        binder.bind(CassandraPageSinkProvider.class).in(Scopes.SINGLETON);
         binder.bind(CassandraPartitionManager.class).in(Scopes.SINGLETON);
+        binder.bind(CassandraSessionProperties.class).in(Scopes.SINGLETON);
 
         configBinder(binder).bindConfig(CassandraClientConfig.class);
 
@@ -80,7 +80,7 @@ public class CassandraClientModule
         requireNonNull(extraColumnMetadataCodec, "extraColumnMetadataCodec is null");
 
         Cluster.Builder clusterBuilder = Cluster.builder()
-                .withProtocolVersion(ProtocolVersion.V3);
+                .withProtocolVersion(config.getProtocolVersion());
 
         List<String> contactPoints = requireNonNull(config.getContactPoints(), "contactPoints is null");
         checkArgument(!contactPoints.isEmpty(), "empty contactPoints");

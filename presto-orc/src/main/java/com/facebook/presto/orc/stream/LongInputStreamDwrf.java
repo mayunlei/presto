@@ -16,14 +16,8 @@ package com.facebook.presto.orc.stream;
 import com.facebook.presto.orc.checkpoint.LongStreamCheckpoint;
 import com.facebook.presto.orc.checkpoint.LongStreamDwrfCheckpoint;
 import com.facebook.presto.orc.metadata.OrcType.OrcTypeKind;
-import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.type.Type;
 
 import java.io.IOException;
-
-import static com.facebook.presto.orc.stream.LongDecode.readDwrfLong;
-import static com.google.common.base.Preconditions.checkPositionIndex;
-import static java.lang.Math.toIntExact;
 
 public class LongInputStreamDwrf
         implements LongInputStream
@@ -59,94 +53,48 @@ public class LongInputStreamDwrf
     public void skip(long items)
             throws IOException
     {
-        // there is no fast way to skip values
-        for (long i = 0; i < items; i++) {
-            next();
+        if (usesVInt) {
+            input.skipVarints(items);
         }
-    }
-
-    @Override
-    public long sum(int items)
-            throws IOException
-    {
-        long sum = 0;
-        for (int i = 0; i < items; i++) {
-            sum += next();
+        else {
+            input.skipDwrfLong(orcTypeKind, items);
         }
-        return sum;
     }
 
     @Override
     public long next()
             throws IOException
     {
-        return readDwrfLong(input, orcTypeKind, signed, usesVInt);
+        if (usesVInt) {
+            return input.readVarint(signed);
+        }
+        return input.readDwrfLong(orcTypeKind);
     }
 
     @Override
-    public void nextIntVector(int items, int[] vector)
+    public void next(long[] values, int items)
             throws IOException
     {
-        checkPositionIndex(items, vector.length);
-
         for (int i = 0; i < items; i++) {
-            vector[i] = toIntExact(next());
+            values[i] = next();
         }
     }
 
     @Override
-    public void nextIntVector(int items, int[] vector, boolean[] isNull)
+    public void next(int[] values, int items)
             throws IOException
     {
         for (int i = 0; i < items; i++) {
-            if (!isNull[i]) {
-                vector[i] = toIntExact(next());
-            }
+            values[i] = (int) next();
         }
     }
 
     @Override
-    public void nextLongVector(int items, long[] vector)
-            throws IOException
-    {
-        checkPositionIndex(items, vector.length);
-
-        for (int i = 0; i < items; i++) {
-            vector[i] = next();
-        }
-    }
-
-    @Override
-    public void nextLongVector(int items, long[] vector, boolean[] isNull)
+    public void next(short[] values, int items)
             throws IOException
     {
         for (int i = 0; i < items; i++) {
-            if (!isNull[i]) {
-                vector[i] = next();
-            }
-        }
-    }
-
-    @Override
-    public void nextLongVector(Type type, int items, BlockBuilder builder)
-            throws IOException
-    {
-        for (int i = 0; i < items; i++) {
-            type.writeLong(builder, next());
-        }
-    }
-
-    @Override
-    public void nextLongVector(Type type, int items, BlockBuilder builder, boolean[] isNull)
-            throws IOException
-    {
-        for (int i = 0; i < items; i++) {
-            if (isNull[i]) {
-                builder.appendNull();
-            }
-            else {
-                type.writeLong(builder, next());
-            }
+            values[i] = (short) next();
         }
     }
 }

@@ -13,12 +13,15 @@
  */
 package com.facebook.presto.split;
 
-import com.facebook.presto.connector.ConnectorId;
+import com.facebook.presto.execution.Lifespan;
 import com.facebook.presto.metadata.Split;
+import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.ConnectorSplit;
 import com.facebook.presto.spi.HostAddress;
+import com.facebook.presto.spi.connector.ConnectorPartitionHandle;
 import com.facebook.presto.spi.connector.ConnectorTransactionHandle;
 import com.google.common.collect.ImmutableList;
+import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
 
@@ -27,10 +30,12 @@ import javax.annotation.concurrent.NotThreadSafe;
 import java.util.Collections;
 import java.util.List;
 
+import static com.facebook.presto.spi.connector.NotPartitionedPartitionHandle.NOT_PARTITIONED;
 import static com.facebook.presto.split.MockSplitSource.Action.DO_NOTHING;
 import static com.facebook.presto.split.MockSplitSource.Action.FINISH;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 
 @NotThreadSafe
 public class MockSplitSource
@@ -38,16 +43,17 @@ public class MockSplitSource
 {
     private static final Split SPLIT = new Split(new ConnectorId("test"), new ConnectorTransactionHandle() {}, new MockConnectorSplit());
     private static final SettableFuture<List<Split>> COMPLETED_FUTURE = SettableFuture.create();
+
     static {
         COMPLETED_FUTURE.set(null);
     }
 
-    private int batchSize = 0;
-    private int totalSplits = 0;
+    private int batchSize;
+    private int totalSplits;
     private Action atSplitDepletion = DO_NOTHING;
 
     private int nextBatchInvocationCount;
-    private int splitsProduced = 0;
+    private int splitsProduced;
 
     private SettableFuture<List<Split>> nextBatchFuture = COMPLETED_FUTURE;
     private int nextBatchMaxSize;
@@ -90,17 +96,6 @@ public class MockSplitSource
         throw new UnsupportedOperationException();
     }
 
-    @Override
-    public ListenableFuture<List<Split>> getNextBatch(int maxSize)
-    {
-        checkState(nextBatchFuture.isDone(), "concurrent getNextBatch invocation");
-        nextBatchFuture = SettableFuture.create();
-        nextBatchMaxSize = maxSize;
-        nextBatchInvocationCount++;
-        doGetNextBatch();
-        return nextBatchFuture;
-    }
-
     private void doGetNextBatch()
     {
         checkState(splitsProduced <= totalSplits);
@@ -123,6 +118,29 @@ public class MockSplitSource
             splitsProduced += splits;
             nextBatchFuture.set(Collections.nCopies(splits, SPLIT));
         }
+    }
+
+    @Override
+    public ListenableFuture<SplitBatch> getNextBatch(ConnectorPartitionHandle partitionHandle, Lifespan lifespan, int maxSize)
+    {
+        if (partitionHandle != NOT_PARTITIONED) {
+            throw new UnsupportedOperationException();
+        }
+        checkArgument(Lifespan.taskWide().equals(lifespan));
+
+        checkState(nextBatchFuture.isDone(), "concurrent getNextBatch invocation");
+        nextBatchFuture = SettableFuture.create();
+        nextBatchMaxSize = maxSize;
+        nextBatchInvocationCount++;
+        doGetNextBatch();
+
+        return Futures.transform(nextBatchFuture, splits -> new SplitBatch(splits, isFinished()), directExecutor());
+    }
+
+    @Override
+    public void rewind(ConnectorPartitionHandle partitionHandle)
+    {
+        throw new UnsupportedOperationException("rewind is not supported in MockSplitSource");
     }
 
     @Override

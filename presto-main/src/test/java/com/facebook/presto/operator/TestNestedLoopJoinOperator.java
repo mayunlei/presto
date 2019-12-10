@@ -18,8 +18,8 @@ import com.facebook.presto.operator.NestedLoopBuildOperator.NestedLoopBuildOpera
 import com.facebook.presto.operator.NestedLoopJoinOperator.NestedLoopJoinOperatorFactory;
 import com.facebook.presto.operator.NestedLoopJoinOperator.NestedLoopPageBuilder;
 import com.facebook.presto.spi.Page;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.testing.MaterializedResult;
 import com.facebook.presto.testing.TestingTaskContext;
 import com.google.common.collect.ImmutableList;
@@ -31,6 +31,7 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 
+import static com.facebook.airlift.concurrent.Threads.daemonThreadsNamed;
 import static com.facebook.presto.RowPagesBuilder.rowPagesBuilder;
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
 import static com.facebook.presto.operator.OperatorAssertion.assertOperatorEquals;
@@ -39,7 +40,6 @@ import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.testing.MaterializedResult.resultBuilder;
 import static com.google.common.collect.Iterables.concat;
-import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static java.util.concurrent.Executors.newCachedThreadPool;
 import static java.util.concurrent.Executors.newScheduledThreadPool;
 import static org.testng.Assert.assertEquals;
@@ -67,20 +67,18 @@ public class TestNestedLoopJoinOperator
 
     @Test
     public void testNestedLoopJoin()
-            throws Exception
     {
         TaskContext taskContext = createTaskContext();
         // build
         RowPagesBuilder buildPages = rowPagesBuilder(ImmutableList.of(VARCHAR, BIGINT, BIGINT))
                 .addSequencePage(3, 20, 30, 40);
-        NestedLoopJoinPagesSupplier nestedLoopJoinPagesSupplier = buildPageSource(taskContext, buildPages);
 
         // probe
         RowPagesBuilder probePages = rowPagesBuilder(ImmutableList.of(VARCHAR, BIGINT, BIGINT));
         List<Page> probeInput = probePages
                 .addSequencePage(2, 0, 1000, 2000)
                 .build();
-        NestedLoopJoinOperatorFactory joinOperatorFactory = new NestedLoopJoinOperatorFactory(3, new PlanNodeId("test"), nestedLoopJoinPagesSupplier, ImmutableList.of(VARCHAR, BIGINT, BIGINT));
+        NestedLoopJoinOperatorFactory joinOperatorFactory = newJoinOperatorFactoryWithCompletedBuild(taskContext, buildPages);
 
         // expected
         MaterializedResult expected = resultBuilder(taskContext.getSession(), concat(probePages.getTypes(), buildPages.getTypes()))
@@ -92,13 +90,12 @@ public class TestNestedLoopJoinOperator
                 .row("1", 1001L, 2001L, "22", 32L, 42L)
                 .build();
 
-        assertOperatorEquals(joinOperatorFactory, taskContext.addPipelineContext(0, true, true).addDriverContext(), probeInput, expected);
+        assertOperatorEquals(joinOperatorFactory, taskContext.addPipelineContext(0, true, true, false).addDriverContext(), probeInput, expected);
 
         // Test probe pages has more rows
         buildPages = rowPagesBuilder(ImmutableList.of(VARCHAR, BIGINT, BIGINT))
                 .addSequencePage(2, 20, 30, 40);
-        nestedLoopJoinPagesSupplier = buildPageSource(taskContext, buildPages);
-        joinOperatorFactory = new NestedLoopJoinOperatorFactory(3, new PlanNodeId("test"), nestedLoopJoinPagesSupplier, ImmutableList.of(VARCHAR, BIGINT, BIGINT));
+        joinOperatorFactory = newJoinOperatorFactoryWithCompletedBuild(taskContext, buildPages);
 
         // probe
         probePages = rowPagesBuilder(ImmutableList.of(VARCHAR, BIGINT, BIGINT));
@@ -116,12 +113,11 @@ public class TestNestedLoopJoinOperator
                 .row("2", 1002L, 2002L, "21", 31L, 41L)
                 .build();
 
-        assertOperatorEquals(joinOperatorFactory, taskContext.addPipelineContext(0, true, true).addDriverContext(), probeInput, expected);
+        assertOperatorEquals(joinOperatorFactory, taskContext.addPipelineContext(0, true, true, false).addDriverContext(), probeInput, expected);
     }
 
     @Test
     public void testCrossJoinWithNullProbe()
-            throws Exception
     {
         TaskContext taskContext = createTaskContext();
 
@@ -130,7 +126,6 @@ public class TestNestedLoopJoinOperator
         RowPagesBuilder buildPages = rowPagesBuilder(buildTypes)
                 .row("a")
                 .row("b");
-        NestedLoopJoinPagesSupplier nestedLoopJoinPagesSupplier = buildPageSource(taskContext, buildPages);
 
         // probe
         List<Type> probeTypes = ImmutableList.of(VARCHAR);
@@ -143,7 +138,7 @@ public class TestNestedLoopJoinOperator
                 .row("B")
                 .build();
 
-        NestedLoopJoinOperatorFactory joinOperatorFactory = new NestedLoopJoinOperatorFactory(3, new PlanNodeId("test"), nestedLoopJoinPagesSupplier, ImmutableList.of(VARCHAR));
+        NestedLoopJoinOperatorFactory joinOperatorFactory = newJoinOperatorFactoryWithCompletedBuild(taskContext, buildPages);
 
         // expected
         MaterializedResult expected = resultBuilder(taskContext.getSession(), concat(probeTypes, buildPages.getTypes()))
@@ -159,12 +154,11 @@ public class TestNestedLoopJoinOperator
                 .row("B", "b")
                 .build();
 
-        assertOperatorEquals(joinOperatorFactory, taskContext.addPipelineContext(0, true, true).addDriverContext(), probeInput, expected);
+        assertOperatorEquals(joinOperatorFactory, taskContext.addPipelineContext(0, true, true, false).addDriverContext(), probeInput, expected);
     }
 
     @Test
     public void testCrossJoinWithNullBuild()
-            throws Exception
     {
         TaskContext taskContext = createTaskContext();
 
@@ -176,7 +170,6 @@ public class TestNestedLoopJoinOperator
                 .row((String) null)
                 .row("a")
                 .row("b");
-        NestedLoopJoinPagesSupplier nestedLoopJoinPagesSupplier = buildPageSource(taskContext, buildPages);
 
         // probe
         List<Type> probeTypes = ImmutableList.of(VARCHAR);
@@ -185,7 +178,7 @@ public class TestNestedLoopJoinOperator
                 .row("A")
                 .row("B")
                 .build();
-        NestedLoopJoinOperatorFactory joinOperatorFactory = new NestedLoopJoinOperatorFactory(3, new PlanNodeId("test"), nestedLoopJoinPagesSupplier, ImmutableList.of(VARCHAR));
+        NestedLoopJoinOperatorFactory joinOperatorFactory = newJoinOperatorFactoryWithCompletedBuild(taskContext, buildPages);
 
         // expected
         MaterializedResult expected = resultBuilder(taskContext.getSession(), concat(probeTypes, buildPages.getTypes()))
@@ -201,12 +194,11 @@ public class TestNestedLoopJoinOperator
                 .row("B", "b")
                 .build();
 
-        assertOperatorEquals(joinOperatorFactory, taskContext.addPipelineContext(0, true, true).addDriverContext(), probeInput, expected);
+        assertOperatorEquals(joinOperatorFactory, taskContext.addPipelineContext(0, true, true, false).addDriverContext(), probeInput, expected);
     }
 
     @Test
     public void testCrossJoinWithNullOnBothSides()
-            throws Exception
     {
         TaskContext taskContext = createTaskContext();
 
@@ -218,7 +210,6 @@ public class TestNestedLoopJoinOperator
                 .row("b")
                 .row("c")
                 .row((String) null);
-        NestedLoopJoinPagesSupplier nestedLoopJoinPagesSupplier = buildPageSource(taskContext, buildPages);
 
         // probe
         List<Type> probeTypes = ImmutableList.of(VARCHAR);
@@ -229,7 +220,7 @@ public class TestNestedLoopJoinOperator
                 .row((String) null)
                 .row("C")
                 .build();
-        NestedLoopJoinOperatorFactory joinOperatorFactory = new NestedLoopJoinOperatorFactory(3, new PlanNodeId("test"), nestedLoopJoinPagesSupplier, ImmutableList.of(VARCHAR));
+        NestedLoopJoinOperatorFactory joinOperatorFactory = newJoinOperatorFactoryWithCompletedBuild(taskContext, buildPages);
 
         // expected
         MaterializedResult expected = resultBuilder(taskContext.getSession(), concat(probeTypes, buildPages.getTypes()))
@@ -255,12 +246,11 @@ public class TestNestedLoopJoinOperator
                 .row("C", null)
                 .build();
 
-        assertOperatorEquals(joinOperatorFactory, taskContext.addPipelineContext(0, true, true).addDriverContext(), probeInput, expected);
+        assertOperatorEquals(joinOperatorFactory, taskContext.addPipelineContext(0, true, true, false).addDriverContext(), probeInput, expected);
     }
 
     @Test
     public void testBuildMultiplePages()
-            throws Exception
     {
         TaskContext taskContext = createTaskContext();
 
@@ -274,7 +264,6 @@ public class TestNestedLoopJoinOperator
                 .row("c")
                 .pageBreak()
                 .row("d");
-        NestedLoopJoinPagesSupplier nestedLoopJoinPagesSupplier = buildPageSource(taskContext, buildPages);
 
         // probe
         List<Type> probeTypes = ImmutableList.of(VARCHAR);
@@ -283,7 +272,7 @@ public class TestNestedLoopJoinOperator
                 .row("A")
                 .row("B")
                 .build();
-        NestedLoopJoinOperatorFactory joinOperatorFactory = new NestedLoopJoinOperatorFactory(3, new PlanNodeId("test"), nestedLoopJoinPagesSupplier, ImmutableList.of(VARCHAR));
+        NestedLoopJoinOperatorFactory joinOperatorFactory = newJoinOperatorFactoryWithCompletedBuild(taskContext, buildPages);
 
         // expected
         MaterializedResult expected = resultBuilder(taskContext.getSession(), concat(probeTypes, buildPages.getTypes()))
@@ -299,12 +288,11 @@ public class TestNestedLoopJoinOperator
                 .row("B", "d")
                 .build();
 
-        assertOperatorEquals(joinOperatorFactory, taskContext.addPipelineContext(0, true, true).addDriverContext(), probeInput, expected);
+        assertOperatorEquals(joinOperatorFactory, taskContext.addPipelineContext(0, true, true, false).addDriverContext(), probeInput, expected);
     }
 
     @Test
     public void testProbeMultiplePages()
-            throws Exception
     {
         TaskContext taskContext = createTaskContext();
 
@@ -313,7 +301,6 @@ public class TestNestedLoopJoinOperator
         RowPagesBuilder buildPages = rowPagesBuilder(buildTypes)
                 .row("A")
                 .row("B");
-        NestedLoopJoinPagesSupplier nestedLoopJoinPagesSupplier = buildPageSource(taskContext, buildPages);
 
         // probe
         List<Type> probeTypes = ImmutableList.of(VARCHAR);
@@ -327,7 +314,7 @@ public class TestNestedLoopJoinOperator
                 .pageBreak()
                 .row("d")
                 .build();
-        NestedLoopJoinOperatorFactory joinOperatorFactory = new NestedLoopJoinOperatorFactory(3, new PlanNodeId("test"), nestedLoopJoinPagesSupplier, ImmutableList.of(VARCHAR));
+        NestedLoopJoinOperatorFactory joinOperatorFactory = newJoinOperatorFactoryWithCompletedBuild(taskContext, buildPages);
 
         // expected
         MaterializedResult expected = resultBuilder(taskContext.getSession(), concat(probeTypes, buildPages.getTypes()))
@@ -343,12 +330,11 @@ public class TestNestedLoopJoinOperator
                 .row("d", "B")
                 .build();
 
-        assertOperatorEquals(joinOperatorFactory, taskContext.addPipelineContext(0, true, true).addDriverContext(), probeInput, expected);
+        assertOperatorEquals(joinOperatorFactory, taskContext.addPipelineContext(0, true, true, false).addDriverContext(), probeInput, expected);
     }
 
     @Test
     public void testProbeAndBuildMultiplePages()
-            throws Exception
     {
         TaskContext taskContext = createTaskContext();
 
@@ -359,7 +345,6 @@ public class TestNestedLoopJoinOperator
                 .row("B")
                 .pageBreak()
                 .row("C");
-        NestedLoopJoinPagesSupplier nestedLoopJoinPagesSupplier = buildPageSource(taskContext, buildPages);
 
         // probe
         List<Type> probeTypes = ImmutableList.of(VARCHAR);
@@ -373,7 +358,7 @@ public class TestNestedLoopJoinOperator
                 .pageBreak()
                 .row("d")
                 .build();
-        NestedLoopJoinOperatorFactory joinOperatorFactory = new NestedLoopJoinOperatorFactory(3, new PlanNodeId("test"), nestedLoopJoinPagesSupplier, ImmutableList.of(VARCHAR));
+        NestedLoopJoinOperatorFactory joinOperatorFactory = newJoinOperatorFactoryWithCompletedBuild(taskContext, buildPages);
 
         // expected
         MaterializedResult expected = resultBuilder(taskContext.getSession(), concat(probeTypes, buildPages.getTypes()))
@@ -394,12 +379,11 @@ public class TestNestedLoopJoinOperator
                 .row("d", "C")
                 .build();
 
-        assertOperatorEquals(joinOperatorFactory, taskContext.addPipelineContext(0, true, true).addDriverContext(), probeInput, expected);
+        assertOperatorEquals(joinOperatorFactory, taskContext.addPipelineContext(0, true, true, false).addDriverContext(), probeInput, expected);
     }
 
     @Test
     public void testEmptyProbePage()
-            throws Exception
     {
         TaskContext taskContext = createTaskContext();
 
@@ -410,7 +394,6 @@ public class TestNestedLoopJoinOperator
                 .row("B")
                 .pageBreak()
                 .row("C");
-        NestedLoopJoinPagesSupplier nestedLoopJoinPagesSupplier = buildPageSource(taskContext, buildPages);
 
         // probe
         List<Type> probeTypes = ImmutableList.of(VARCHAR);
@@ -418,18 +401,17 @@ public class TestNestedLoopJoinOperator
         List<Page> probeInput = probePages
                 .pageBreak()
                 .build();
-        NestedLoopJoinOperatorFactory joinOperatorFactory = new NestedLoopJoinOperatorFactory(3, new PlanNodeId("test"), nestedLoopJoinPagesSupplier, ImmutableList.of(VARCHAR));
+        NestedLoopJoinOperatorFactory joinOperatorFactory = newJoinOperatorFactoryWithCompletedBuild(taskContext, buildPages);
 
         // expected
         MaterializedResult expected = resultBuilder(taskContext.getSession(), concat(probeTypes, buildPages.getTypes()))
                 .build();
 
-        assertOperatorEquals(joinOperatorFactory, taskContext.addPipelineContext(0, true, true).addDriverContext(), probeInput, expected);
+        assertOperatorEquals(joinOperatorFactory, taskContext.addPipelineContext(0, true, true, false).addDriverContext(), probeInput, expected);
     }
 
     @Test
     public void testEmptyBuildPage()
-            throws Exception
     {
         TaskContext taskContext = createTaskContext();
 
@@ -437,7 +419,6 @@ public class TestNestedLoopJoinOperator
         List<Type> buildTypes = ImmutableList.of(VARCHAR);
         RowPagesBuilder buildPages = rowPagesBuilder(buildTypes)
                 .pageBreak();
-        NestedLoopJoinPagesSupplier nestedLoopJoinPagesSupplier = buildPageSource(taskContext, buildPages);
 
         // probe
         List<Type> probeTypes = ImmutableList.of(VARCHAR);
@@ -447,18 +428,17 @@ public class TestNestedLoopJoinOperator
                 .row("B")
                 .pageBreak()
                 .build();
-        NestedLoopJoinOperatorFactory joinOperatorFactory = new NestedLoopJoinOperatorFactory(3, new PlanNodeId("test"), nestedLoopJoinPagesSupplier, ImmutableList.of(VARCHAR));
+        NestedLoopJoinOperatorFactory joinOperatorFactory = newJoinOperatorFactoryWithCompletedBuild(taskContext, buildPages);
 
         // expected
         MaterializedResult expected = resultBuilder(taskContext.getSession(), concat(probeTypes, buildPages.getTypes()))
                 .build();
 
-        assertOperatorEquals(joinOperatorFactory, taskContext.addPipelineContext(0, true, true).addDriverContext(), probeInput, expected);
+        assertOperatorEquals(joinOperatorFactory, taskContext.addPipelineContext(0, true, true, false).addDriverContext(), probeInput, expected);
     }
 
     @Test
     public void testCount()
-            throws Exception
     {
         // normal case
         Page buildPage = new Page(100);
@@ -489,23 +469,34 @@ public class TestNestedLoopJoinOperator
         return TestingTaskContext.createTaskContext(executor, scheduledExecutor, TEST_SESSION);
     }
 
-    private static NestedLoopJoinPagesSupplier buildPageSource(TaskContext taskContext, RowPagesBuilder buildPages)
+    private static NestedLoopJoinOperatorFactory newJoinOperatorFactoryWithCompletedBuild(TaskContext taskContext, RowPagesBuilder buildPages)
     {
-        DriverContext driverContext = taskContext.addPipelineContext(0, true, true).addDriverContext();
+        DriverContext driverContext = taskContext.addPipelineContext(0, true, true, false).addDriverContext();
 
-        ValuesOperatorFactory valuesOperatorFactory = new ValuesOperatorFactory(0, new PlanNodeId("test"), buildPages.getTypes(), buildPages.build());
-        NestedLoopBuildOperatorFactory nestedLoopBuildOperatorFactory = new NestedLoopBuildOperatorFactory(1, new PlanNodeId("test"), buildPages.getTypes());
+        ValuesOperatorFactory valuesOperatorFactory = new ValuesOperatorFactory(0, new PlanNodeId("test"), buildPages.build());
 
-        Driver driver = new Driver(driverContext,
-                valuesOperatorFactory.createOperator(driverContext),
-                nestedLoopBuildOperatorFactory.createOperator(driverContext));
+        JoinBridgeManager<NestedLoopJoinBridge> nestedLoopJoinBridgeManager = new JoinBridgeManager<>(
+                false,
+                PipelineExecutionStrategy.UNGROUPED_EXECUTION,
+                PipelineExecutionStrategy.UNGROUPED_EXECUTION,
+                lifespan -> new NestedLoopJoinPagesSupplier(),
+                buildPages.getTypes());
+        NestedLoopBuildOperatorFactory nestedLoopBuildOperatorFactory = new NestedLoopBuildOperatorFactory(1, new PlanNodeId("test"), nestedLoopJoinBridgeManager);
+        NestedLoopJoinOperatorFactory joinOperatorFactory = new NestedLoopJoinOperatorFactory(3, new PlanNodeId("test"), nestedLoopJoinBridgeManager);
+
+        Operator valuesOperator = valuesOperatorFactory.createOperator(driverContext);
+        Operator nestedLoopBuildOperator = nestedLoopBuildOperatorFactory.createOperator(driverContext);
+        Driver driver = Driver.createDriver(driverContext,
+                valuesOperator,
+                nestedLoopBuildOperator);
 
         valuesOperatorFactory.noMoreOperators();
         nestedLoopBuildOperatorFactory.noMoreOperators();
 
-        while (!driver.isFinished()) {
+        while (nestedLoopBuildOperator.isBlocked().isDone()) {
             driver.process();
         }
-        return nestedLoopBuildOperatorFactory.getNestedLoopJoinPagesSupplier();
+
+        return joinOperatorFactory;
     }
 }

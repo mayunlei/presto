@@ -13,10 +13,10 @@
  */
 package com.facebook.presto.jdbc;
 
-import com.facebook.presto.execution.QueryInfo;
+import com.facebook.airlift.log.Logging;
+import com.facebook.presto.server.BasicQueryInfo;
 import com.facebook.presto.server.testing.TestingPrestoServer;
 import com.facebook.presto.spi.QueryId;
-import io.airlift.log.Logging;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeClass;
@@ -32,10 +32,10 @@ import java.sql.Types;
 import java.util.Set;
 import java.util.concurrent.Callable;
 
+import static com.facebook.airlift.testing.Assertions.assertContains;
 import static com.facebook.presto.jdbc.TestPrestoDriver.closeQuietly;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Iterables.getOnlyElement;
-import static io.airlift.testing.Assertions.assertContains;
 import static java.lang.String.format;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
@@ -72,7 +72,6 @@ public class TestPrestoDatabaseMetaData
 
     @AfterMethod(alwaysRun = true)
     public void tearDown()
-            throws SQLException
     {
         closeQuietly(connection);
     }
@@ -158,15 +157,15 @@ public class TestPrestoDatabaseMetaData
     private Set<String> captureQueries(Callable<?> action)
             throws Exception
     {
-        Set<QueryId> queryIdsBefore = server.getQueryManager().getAllQueryInfo().stream()
-                .map(QueryInfo::getQueryId)
+        Set<QueryId> queryIdsBefore = server.getQueryManager().getQueries().stream()
+                .map(BasicQueryInfo::getQueryId)
                 .collect(toImmutableSet());
 
         action.call();
 
-        return server.getQueryManager().getAllQueryInfo().stream()
+        return server.getQueryManager().getQueries().stream()
                 .filter(queryInfo -> !queryIdsBefore.contains(queryInfo.getQueryId()))
-                .map(QueryInfo::getQuery)
+                .map(BasicQueryInfo::getQuery)
                 .collect(toImmutableSet());
     }
 

@@ -21,8 +21,8 @@ import com.google.common.util.concurrent.ListeningScheduledExecutorService;
 
 import java.util.Map;
 
+import static com.facebook.airlift.concurrent.Threads.daemonThreadsNamed;
 import static com.google.common.util.concurrent.MoreExecutors.listeningDecorator;
-import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static java.util.concurrent.Executors.newSingleThreadScheduledExecutor;
 
 public class BlackHoleConnectorFactory
@@ -41,7 +41,7 @@ public class BlackHoleConnectorFactory
     }
 
     @Override
-    public Connector create(String connectorId, Map<String, String> requiredConfig, ConnectorContext context)
+    public Connector create(String catalogName, Map<String, String> requiredConfig, ConnectorContext context)
     {
         ListeningScheduledExecutorService executorService = listeningDecorator(newSingleThreadScheduledExecutor(daemonThreadsNamed("blackhole")));
         return new BlackHoleConnector(

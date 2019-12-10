@@ -1,4 +1,4 @@
--- database: presto_tpcds; groups: tpcds; requires: com.teradata.tempto.fulfillment.table.hive.tpcds.ImmutableTpcdsTablesRequirements
+-- database: presto_tpcds; groups: tpcds; requires: io.prestodb.tempto.fulfillment.table.hive.tpcds.ImmutableTpcdsTablesRequirements
 SELECT "sum"("ss_quantity")
 FROM
   store_sales
@@ -11,15 +11,15 @@ WHERE ("s_store_sk" = "ss_store_sk")
    AND ("d_year" = 2000)
    AND ((("cd_demo_sk" = "ss_cdemo_sk")
          AND ("cd_marital_status" = 'M')
-         AND ("cd_education_status" = '4 yr Degree         ')
+         AND ("cd_education_status" = '4 yr Degree')
          AND ("ss_sales_price" BETWEEN DECIMAL '100.00' AND DECIMAL '150.00'))
       OR (("cd_demo_sk" = "ss_cdemo_sk")
          AND ("cd_marital_status" = 'D')
-         AND ("cd_education_status" = '2 yr Degree         ')
+         AND ("cd_education_status" = '2 yr Degree')
          AND ("ss_sales_price" BETWEEN DECIMAL '50.00' AND DECIMAL '100.00'))
       OR (("cd_demo_sk" = "ss_cdemo_sk")
          AND ("cd_marital_status" = 'S')
-         AND ("cd_education_status" = 'College             ')
+         AND ("cd_education_status" = 'College')
          AND ("ss_sales_price" BETWEEN DECIMAL '150.00' AND DECIMAL '200.00')))
    AND ((("ss_addr_sk" = "ca_address_sk")
          AND ("ca_country" = 'United States')

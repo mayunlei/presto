@@ -15,10 +15,8 @@ package com.facebook.presto.rcfile.binary;
 
 import com.facebook.presto.rcfile.ColumnData;
 import com.facebook.presto.rcfile.EncodeOutput;
-import com.facebook.presto.rcfile.RcFileCorruptionException;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.block.BlockBuilderStatus;
 import com.facebook.presto.spi.type.DecimalType;
 import com.facebook.presto.spi.type.Decimals;
 import com.facebook.presto.spi.type.Type;
@@ -53,7 +51,6 @@ public class DecimalEncoding
 
     @Override
     public void encodeColumn(Block block, SliceOutput output, EncodeOutput encodeOutput)
-            throws RcFileCorruptionException
     {
         for (int position = 0; position < block.getPositionCount(); position++) {
             if (!block.isNull(position)) {
@@ -78,7 +75,7 @@ public class DecimalEncoding
     public Block decodeColumn(ColumnData columnData)
     {
         int size = columnData.rowCount();
-        BlockBuilder builder = type.createBlockBuilder(new BlockBuilderStatus(), size);
+        BlockBuilder builder = type.createBlockBuilder(null, size);
 
         Slice slice = columnData.getSlice();
         for (int i = 0; i < size; i++) {
@@ -223,7 +220,7 @@ public class DecimalEncoding
 
         // second vint is length
         // todo get rid of BigInteger
-        BigInteger decimal = Decimals.decodeUnscaledValue(block.getSlice(position, 0, BYTES_IN_LONG_DECIMAL));
+        BigInteger decimal = Decimals.decodeUnscaledValue(type.getSlice(block, position));
         byte[] decimalBytes = decimal.toByteArray();
         writeVInt(output, decimalBytes.length);
 

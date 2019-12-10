@@ -17,9 +17,10 @@ import com.facebook.presto.bytecode.BytecodeNode;
 import com.facebook.presto.bytecode.FieldDefinition;
 import com.facebook.presto.bytecode.Scope;
 import com.facebook.presto.bytecode.Variable;
-import com.facebook.presto.metadata.FunctionRegistry;
-import com.facebook.presto.operator.scalar.ScalarFunctionImplementation;
-import com.facebook.presto.sql.relational.RowExpression;
+import com.facebook.presto.metadata.FunctionManager;
+import com.facebook.presto.operator.scalar.BuiltInScalarFunctionImplementation;
+import com.facebook.presto.spi.relation.RowExpression;
+import com.facebook.presto.sql.gen.BytecodeUtils.OutputBlockVariableAndType;
 
 import java.util.List;
 import java.util.Optional;
@@ -33,8 +34,7 @@ public class BytecodeGeneratorContext
     private final Scope scope;
     private final CallSiteBinder callSiteBinder;
     private final CachedInstanceBinder cachedInstanceBinder;
-    private final FunctionRegistry registry;
-    private final PreGeneratedExpressions preGeneratedExpressions;
+    private final FunctionManager manager;
     private final Variable wasNull;
 
     public BytecodeGeneratorContext(
@@ -42,21 +42,19 @@ public class BytecodeGeneratorContext
             Scope scope,
             CallSiteBinder callSiteBinder,
             CachedInstanceBinder cachedInstanceBinder,
-            FunctionRegistry registry,
-            PreGeneratedExpressions preGeneratedExpressions)
+            FunctionManager manager)
     {
         requireNonNull(rowExpressionCompiler, "bytecodeGenerator is null");
         requireNonNull(cachedInstanceBinder, "cachedInstanceBinder is null");
         requireNonNull(scope, "scope is null");
         requireNonNull(callSiteBinder, "callSiteBinder is null");
-        requireNonNull(registry, "registry is null");
+        requireNonNull(manager, "manager is null");
 
         this.rowExpressionCompiler = rowExpressionCompiler;
         this.scope = scope;
         this.callSiteBinder = callSiteBinder;
         this.cachedInstanceBinder = cachedInstanceBinder;
-        this.registry = registry;
-        this.preGeneratedExpressions = preGeneratedExpressions;
+        this.manager = manager;
         this.wasNull = scope.getVariable("wasNull");
     }
 
@@ -70,33 +68,41 @@ public class BytecodeGeneratorContext
         return callSiteBinder;
     }
 
-    public BytecodeNode generate(RowExpression expression)
+    public BytecodeNode generate(RowExpression expression, Optional<Variable> outputBlockVariable)
     {
-        return generate(expression, Optional.empty());
+        return generate(expression, outputBlockVariable, Optional.empty());
     }
 
-    public BytecodeNode generate(RowExpression expression, Optional<Class> lambdaInterface)
+    public BytecodeNode generate(RowExpression expression, Optional<Variable> outputBlockVariable, Optional<Class> lambdaInterface)
     {
-        return rowExpressionCompiler.compile(expression, scope, lambdaInterface);
+        return rowExpressionCompiler.compile(expression, scope, outputBlockVariable, lambdaInterface);
     }
 
-    public FunctionRegistry getRegistry()
+    public FunctionManager getFunctionManager()
     {
-        return registry;
+        return manager;
+    }
+
+    public BytecodeNode generateCall(String name, BuiltInScalarFunctionImplementation function, List<BytecodeNode> arguments)
+    {
+        return generateCall(name, function, arguments, Optional.empty());
     }
 
     /**
      * Generates a function call with null handling, automatic binding of session parameter, etc.
      */
-    public BytecodeNode generateCall(String name, ScalarFunctionImplementation function, List<BytecodeNode> arguments)
+    public BytecodeNode generateCall(
+            String name,
+            BuiltInScalarFunctionImplementation function,
+            List<BytecodeNode> arguments,
+            Optional<OutputBlockVariableAndType> outputBlockVariableAndType)
     {
-        Binding binding = callSiteBinder.bind(function.getMethodHandle());
         Optional<BytecodeNode> instance = Optional.empty();
         if (function.getInstanceFactory().isPresent()) {
             FieldDefinition field = cachedInstanceBinder.getCachedInstance(function.getInstanceFactory().get());
             instance = Optional.of(scope.getThis().getField(field));
         }
-        return generateInvocation(scope, name, function, instance, arguments, binding);
+        return generateInvocation(scope, name, function, instance, arguments, callSiteBinder, outputBlockVariableAndType);
     }
 
     public Variable wasNull()

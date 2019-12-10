@@ -18,12 +18,11 @@ import com.facebook.presto.spi.Page;
 import com.google.common.util.concurrent.ListeningScheduledExecutorService;
 import io.airlift.units.Duration;
 
-import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
 
+import static com.facebook.airlift.concurrent.MoreFutures.getFutureValue;
+import static com.facebook.airlift.concurrent.MoreFutures.toCompletableFuture;
 import static com.google.common.base.Preconditions.checkArgument;
-import static io.airlift.concurrent.MoreFutures.getFutureValue;
-import static io.airlift.concurrent.MoreFutures.toCompletableFuture;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
@@ -35,6 +34,7 @@ class BlackHolePageSource
     private final ListeningScheduledExecutorService executorService;
     private final long pageProcessingDelayInMillis;
     private long completedBytes;
+    private long completedPositions;
     private final long memoryUsageBytes;
     private boolean closed;
     private CompletableFuture<Page> currentPage;
@@ -64,6 +64,7 @@ class BlackHolePageSource
 
         pagesLeft--;
         completedBytes += page.getSizeInBytes();
+        completedPositions += page.getPositionCount();
 
         if (pageProcessingDelayInMillis == 0) {
             return page;
@@ -91,7 +92,6 @@ class BlackHolePageSource
 
     @Override
     public void close()
-            throws IOException
     {
         closed = true;
     }
@@ -100,6 +100,12 @@ class BlackHolePageSource
     public long getCompletedBytes()
     {
         return completedBytes;
+    }
+
+    @Override
+    public long getCompletedPositions()
+    {
+        return completedPositions;
     }
 
     @Override

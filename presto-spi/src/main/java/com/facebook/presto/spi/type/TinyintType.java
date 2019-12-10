@@ -19,6 +19,8 @@ import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
 import com.facebook.presto.spi.block.ByteArrayBlockBuilder;
+import com.facebook.presto.spi.block.PageBuilderStatus;
+import com.facebook.presto.spi.block.UncheckedBlock;
 
 import static com.facebook.presto.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
@@ -46,10 +48,10 @@ public final class TinyintType
     {
         int maxBlockSizeInBytes;
         if (blockBuilderStatus == null) {
-            maxBlockSizeInBytes = BlockBuilderStatus.DEFAULT_MAX_BLOCK_SIZE_IN_BYTES;
+            maxBlockSizeInBytes = PageBuilderStatus.DEFAULT_MAX_PAGE_SIZE_IN_BYTES;
         }
         else {
-            maxBlockSizeInBytes = blockBuilderStatus.getMaxBlockSizeInBytes();
+            maxBlockSizeInBytes = blockBuilderStatus.getMaxPageSizeInBytes();
         }
         return new ByteArrayBlockBuilder(
                 blockBuilderStatus,
@@ -65,7 +67,7 @@ public final class TinyintType
     @Override
     public BlockBuilder createFixedSizeBlockBuilder(int positionCount)
     {
-        return new ByteArrayBlockBuilder(new BlockBuilderStatus(), positionCount);
+        return new ByteArrayBlockBuilder(null, positionCount);
     }
 
     @Override
@@ -87,21 +89,21 @@ public final class TinyintType
             return null;
         }
 
-        return block.getByte(position, 0);
+        return block.getByte(position);
     }
 
     @Override
     public boolean equalTo(Block leftBlock, int leftPosition, Block rightBlock, int rightPosition)
     {
-        int leftValue = leftBlock.getByte(leftPosition, 0);
-        int rightValue = rightBlock.getByte(rightPosition, 0);
+        int leftValue = leftBlock.getByte(leftPosition);
+        int rightValue = rightBlock.getByte(rightPosition);
         return leftValue == rightValue;
     }
 
     @Override
     public long hash(Block block, int position)
     {
-        return hash(block.getByte(position, 0));
+        return hash(block.getByte(position));
     }
 
     @Override
@@ -109,8 +111,8 @@ public final class TinyintType
     {
         // WARNING: the correctness of InCodeGenerator is dependent on the implementation of this
         // function being the equivalence of internal long representation.
-        byte leftValue = leftBlock.getByte(leftPosition, 0);
-        byte rightValue = rightBlock.getByte(rightPosition, 0);
+        byte leftValue = leftBlock.getByte(leftPosition);
+        byte rightValue = rightBlock.getByte(rightPosition);
         return Byte.compare(leftValue, rightValue);
     }
 
@@ -121,14 +123,20 @@ public final class TinyintType
             blockBuilder.appendNull();
         }
         else {
-            blockBuilder.writeByte(block.getByte(position, 0)).closeEntry();
+            blockBuilder.writeByte(block.getByte(position)).closeEntry();
         }
     }
 
     @Override
     public long getLong(Block block, int position)
     {
-        return (long) block.getByte(position, 0);
+        return (long) block.getByte(position);
+    }
+
+    @Override
+    public long getLongUnchecked(UncheckedBlock block, int internalPosition)
+    {
+        return (long) block.getByteUnchecked(internalPosition);
     }
 
     @Override

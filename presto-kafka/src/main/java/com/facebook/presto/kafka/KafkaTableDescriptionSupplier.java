@@ -13,26 +13,26 @@
  */
 package com.facebook.presto.kafka;
 
+import com.facebook.airlift.json.JsonCodec;
+import com.facebook.airlift.log.Logger;
 import com.facebook.presto.decoder.dummy.DummyRowDecoder;
 import com.facebook.presto.spi.SchemaTableName;
 import com.google.common.base.Splitter;
-import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import io.airlift.json.JsonCodec;
-import io.airlift.log.Logger;
 
 import javax.inject.Inject;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.function.Supplier;
 
-import static com.google.common.base.MoreObjects.firstNonNull;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Strings.isNullOrEmpty;
 import static java.nio.file.Files.readAllBytes;
@@ -72,7 +72,7 @@ public class KafkaTableDescriptionSupplier
             for (File file : listFiles(tableDescriptionDir)) {
                 if (file.isFile() && file.getName().endsWith(".json")) {
                     KafkaTopicDescription table = topicDescriptionCodec.fromJson(readAllBytes(file.toPath()));
-                    String schemaName = firstNonNull(table.getSchemaName(), defaultSchema);
+                    String schemaName = table.getSchemaName().orElse(defaultSchema);
                     log.debug("Kafka table %s.%s: %s", schemaName, table.getTableName(), table);
                     builder.put(new SchemaTableName(schemaName, table.getTableName()), table);
                 }
@@ -100,11 +100,12 @@ public class KafkaTableDescriptionSupplier
                 else {
                     // A dummy table definition only supports the internal columns.
                     log.debug("Created dummy Table definition for %s", tableName);
-                    builder.put(tableName, new KafkaTopicDescription(tableName.getTableName(),
-                            tableName.getSchemaName(),
+                    builder.put(tableName, new KafkaTopicDescription(
+                            tableName.getTableName(),
+                            Optional.ofNullable(tableName.getSchemaName()),
                             definedTable,
-                            new KafkaTopicFieldGroup(DummyRowDecoder.NAME, ImmutableList.of()),
-                            new KafkaTopicFieldGroup(DummyRowDecoder.NAME, ImmutableList.of())));
+                            Optional.of(new KafkaTopicFieldGroup(DummyRowDecoder.NAME, Optional.empty(), ImmutableList.of())),
+                            Optional.of(new KafkaTopicFieldGroup(DummyRowDecoder.NAME, Optional.empty(), ImmutableList.of()))));
                 }
             }
 
@@ -112,7 +113,7 @@ public class KafkaTableDescriptionSupplier
         }
         catch (IOException e) {
             log.warn(e, "Error: ");
-            throw Throwables.propagate(e);
+            throw new UncheckedIOException(e);
         }
     }
 

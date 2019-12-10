@@ -40,7 +40,7 @@ public class MemoryPagesStore
     private final long maxBytes;
 
     @GuardedBy("this")
-    private long currentBytes = 0;
+    private long currentBytes;
 
     private final Map<Long, TableData> tables = new HashMap<>();
 
@@ -62,6 +62,8 @@ public class MemoryPagesStore
         if (!contains(tableId)) {
             throw new PrestoException(MISSING_DATA, "Failed to find table on a worker.");
         }
+
+        page.compact();
 
         long newSize = currentBytes + page.getRetainedSizeInBytes();
         if (maxBytes < newSize) {
@@ -133,11 +135,10 @@ public class MemoryPagesStore
 
     private static Page getColumns(Page page, List<Integer> columnIndexes)
     {
-        Block[] blocks = page.getBlocks();
         Block[] outputBlocks = new Block[columnIndexes.size()];
 
         for (int i = 0; i < columnIndexes.size(); i++) {
-            outputBlocks[i] = blocks[columnIndexes.get(i)];
+            outputBlocks[i] = page.getBlock(columnIndexes.get(i));
         }
 
         return new Page(page.getPositionCount(), outputBlocks);
@@ -145,7 +146,7 @@ public class MemoryPagesStore
 
     private static final class TableData
     {
-        private List<Page> pages = new ArrayList<>();
+        private final List<Page> pages = new ArrayList<>();
         private long rows;
 
         public void add(Page page)

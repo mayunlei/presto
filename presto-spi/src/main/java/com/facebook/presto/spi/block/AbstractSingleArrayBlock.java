@@ -15,7 +15,7 @@ package com.facebook.presto.spi.block;
 
 import io.airlift.slice.Slice;
 
-import java.util.List;
+import static com.facebook.presto.spi.block.BlockUtil.internalPositionInRange;
 
 public abstract class AbstractSingleArrayBlock
         implements Block
@@ -27,7 +27,7 @@ public abstract class AbstractSingleArrayBlock
         this.start = start;
     }
 
-    protected abstract BlockBuilder getBlock();
+    protected abstract Block getBlock();
 
     private void checkReadablePosition(int position)
     {
@@ -44,24 +44,31 @@ public abstract class AbstractSingleArrayBlock
     }
 
     @Override
-    public byte getByte(int position, int offset)
+    public byte getByte(int position)
     {
         checkReadablePosition(position);
-        return getBlock().getByte(position + start, offset);
+        return getBlock().getByte(position + start);
     }
 
     @Override
-    public short getShort(int position, int offset)
+    public short getShort(int position)
     {
         checkReadablePosition(position);
-        return getBlock().getShort(position + start, offset);
+        return getBlock().getShort(position + start);
     }
 
     @Override
-    public int getInt(int position, int offset)
+    public int getInt(int position)
     {
         checkReadablePosition(position);
-        return getBlock().getInt(position + start, offset);
+        return getBlock().getInt(position + start);
+    }
+
+    @Override
+    public long getLong(int position)
+    {
+        checkReadablePosition(position);
+        return getBlock().getLong(position + start);
     }
 
     @Override
@@ -79,10 +86,10 @@ public abstract class AbstractSingleArrayBlock
     }
 
     @Override
-    public <T> T getObject(int position, Class<T> clazz)
+    public Block getBlock(int position)
     {
         checkReadablePosition(position);
-        return getBlock().getObject(position + start, clazz);
+        return getBlock().getBlock(position + start);
     }
 
     @Override
@@ -142,6 +149,13 @@ public abstract class AbstractSingleArrayBlock
     }
 
     @Override
+    public long getEstimatedDataSizeForStats(int position)
+    {
+        checkReadablePosition(position);
+        return getBlock().getEstimatedDataSizeForStats(position + start);
+    }
+
+    @Override
     public boolean isNull(int position)
     {
         checkReadablePosition(position);
@@ -149,14 +163,14 @@ public abstract class AbstractSingleArrayBlock
     }
 
     @Override
-    public BlockEncoding getEncoding()
+    public String getEncodingName()
     {
         // SingleArrayBlockEncoding does not exist
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public Block copyPositions(List<Integer> positions)
+    public Block copyPositions(int[] positions, int offset, int length)
     {
         throw new UnsupportedOperationException();
     }
@@ -174,8 +188,83 @@ public abstract class AbstractSingleArrayBlock
     }
 
     @Override
+    public long getPositionsSizeInBytes(boolean[] positions)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public Block copyRegion(int position, int length)
     {
         throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public int getSliceLengthUnchecked(int internalPosition)
+    {
+        assert internalPositionInRange(internalPosition, getOffsetBase(), getPositionCount());
+        return getBlock().getSliceLength(internalPosition);
+    }
+
+    @Override
+    public byte getByteUnchecked(int internalPosition)
+    {
+        assert internalPositionInRange(internalPosition, getOffsetBase(), getPositionCount());
+        return getBlock().getByte(internalPosition);
+    }
+
+    @Override
+    public short getShortUnchecked(int internalPosition)
+    {
+        assert internalPositionInRange(internalPosition, getOffsetBase(), getPositionCount());
+        return getBlock().getShort(internalPosition);
+    }
+
+    @Override
+    public int getIntUnchecked(int internalPosition)
+    {
+        assert internalPositionInRange(internalPosition, getOffsetBase(), getPositionCount());
+        return getBlock().getInt(internalPosition);
+    }
+
+    @Override
+    public long getLongUnchecked(int internalPosition)
+    {
+        assert internalPositionInRange(internalPosition, getOffsetBase(), getPositionCount());
+        return getBlock().getLong(internalPosition);
+    }
+
+    @Override
+    public long getLongUnchecked(int internalPosition, int offset)
+    {
+        assert internalPositionInRange(internalPosition, getOffsetBase(), getPositionCount());
+        return getBlock().getLong(internalPosition, offset);
+    }
+
+    @Override
+    public Slice getSliceUnchecked(int internalPosition, int offset, int length)
+    {
+        assert internalPositionInRange(internalPosition, getOffsetBase(), getPositionCount());
+        return getBlock().getSlice(internalPosition, offset, length);
+    }
+
+    @Override
+    public Block getBlockUnchecked(int internalPosition)
+    {
+        assert internalPositionInRange(internalPosition, getOffsetBase(), getPositionCount());
+        return getBlock().getBlockUnchecked(internalPosition);
+    }
+
+    @Override
+    public int getOffsetBase()
+    {
+        return start;
+    }
+
+    @Override
+    public boolean isNullUnchecked(int internalPosition)
+    {
+        assert internalPositionInRange(internalPosition, getOffsetBase(), getPositionCount());
+        return getBlock().isNullUnchecked(internalPosition);
     }
 }

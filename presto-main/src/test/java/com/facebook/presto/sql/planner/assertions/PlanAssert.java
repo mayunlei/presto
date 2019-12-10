@@ -14,12 +14,18 @@
 package com.facebook.presto.sql.planner.assertions;
 
 import com.facebook.presto.Session;
-import com.facebook.presto.cost.CostCalculator;
+import com.facebook.presto.cost.CachingStatsProvider;
+import com.facebook.presto.cost.StatsAndCosts;
+import com.facebook.presto.cost.StatsCalculator;
+import com.facebook.presto.cost.StatsProvider;
 import com.facebook.presto.metadata.Metadata;
+import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.sql.planner.Plan;
 import com.facebook.presto.sql.planner.iterative.Lookup;
-import com.facebook.presto.sql.planner.plan.PlanNode;
 
+import java.util.function.Function;
+
+import static com.facebook.presto.sql.planner.iterative.Lookup.noLookup;
 import static com.facebook.presto.sql.planner.iterative.Plans.resolveGroupReferences;
 import static com.facebook.presto.sql.planner.planPrinter.PlanPrinter.textLogicalPlan;
 import static java.lang.String.format;
@@ -28,22 +34,22 @@ public final class PlanAssert
 {
     private PlanAssert() {}
 
-    public static void assertPlan(Session session, Metadata metadata, CostCalculator costCalculator, Plan actual, PlanMatchPattern pattern)
+    public static void assertPlan(Session session, Metadata metadata, StatsCalculator statsCalculator, Plan actual, PlanMatchPattern pattern)
     {
-        assertPlan(session, metadata, costCalculator, actual, Lookup.noLookup(), pattern);
+        StatsProvider statsProvider = new CachingStatsProvider(statsCalculator, session, actual.getTypes());
+        assertPlan(session, metadata, statsProvider, actual, noLookup(), pattern, Function.identity());
     }
 
-    public static void assertPlan(Session session, Metadata metadata, CostCalculator costCalculator, Plan actual, Lookup lookup, PlanMatchPattern pattern)
+    public static void assertPlan(Session session, Metadata metadata, StatsProvider statsProvider, Plan actual, Lookup lookup, PlanMatchPattern pattern, Function<PlanNode, PlanNode> planSanitizer)
     {
-        MatchResult matches = actual.getRoot().accept(new PlanMatchingVisitor(session, metadata, actual.getPlanNodeCosts(), lookup), pattern);
+        MatchResult matches = actual.getRoot().accept(new PlanMatchingVisitor(session, metadata, statsProvider, lookup), pattern);
+        // TODO (Issue #13231) add back printing unresolved plan once we have no need to translate OriginalExpression to RowExpression
         if (!matches.isMatch()) {
-            String formattedPlan = textLogicalPlan(actual.getRoot(), actual.getTypes(), metadata, costCalculator, session);
             PlanNode resolvedPlan = resolveGroupReferences(actual.getRoot(), lookup);
-            String resolvedFormattedPlan = textLogicalPlan(resolvedPlan, actual.getTypes(), metadata, costCalculator, session);
+            String resolvedFormattedPlan = textLogicalPlan(planSanitizer.apply(resolvedPlan), actual.getTypes(), metadata.getFunctionManager(), StatsAndCosts.empty(), session, 0);
             throw new AssertionError(format(
-                    "Plan does not match, expected [\n\n%s\n] but found [\n\n%s\n] which resolves to [\n\n%s\n]",
+                    "Plan does not match, expected [\n\n%s\n] but found [\n\n%s\n]",
                     pattern,
-                    formattedPlan,
                     resolvedFormattedPlan));
         }
     }

@@ -13,12 +13,13 @@
  */
 package com.facebook.presto.metadata;
 
+import com.facebook.airlift.json.JsonCodec;
+import com.facebook.airlift.json.JsonCodecFactory;
 import com.facebook.presto.Session;
 import com.facebook.presto.SystemSessionProperties;
-import com.facebook.presto.connector.ConnectorId;
+import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.block.BlockBuilderStatus;
 import com.facebook.presto.spi.session.PropertyMetadata;
 import com.facebook.presto.spi.type.ArrayType;
 import com.facebook.presto.spi.type.BigintType;
@@ -33,8 +34,6 @@ import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.ExpressionTreeRewriter;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Maps;
-import io.airlift.json.JsonCodec;
-import io.airlift.json.JsonCodecFactory;
 
 import javax.annotation.Nullable;
 import javax.inject.Inject;
@@ -230,7 +229,7 @@ public final class SessionPropertyManager
         Object value = evaluateConstantExpression(rewritten, expectedType, metadata, session, parameters);
 
         // convert to object value type of SQL type
-        BlockBuilder blockBuilder = expectedType.createBlockBuilder(new BlockBuilderStatus(), 1);
+        BlockBuilder blockBuilder = expectedType.createBlockBuilder(null, 1);
         writeNativeValue(expectedType, blockBuilder, value);
         Object objectValue = expectedType.getObjectValue(session.toConnectorSession(), blockBuilder, 0);
 

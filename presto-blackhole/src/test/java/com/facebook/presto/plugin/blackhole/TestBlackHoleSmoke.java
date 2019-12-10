@@ -26,11 +26,11 @@ import org.testng.annotations.BeforeTest;
 import org.testng.annotations.Test;
 
 import java.math.BigDecimal;
-import java.sql.Date;
-import java.sql.SQLException;
-import java.sql.Timestamp;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 
+import static com.facebook.airlift.testing.Assertions.assertGreaterThan;
 import static com.facebook.presto.plugin.blackhole.BlackHoleConnector.FIELD_LENGTH_PROPERTY;
 import static com.facebook.presto.plugin.blackhole.BlackHoleConnector.PAGES_PER_SPLIT_PROPERTY;
 import static com.facebook.presto.plugin.blackhole.BlackHoleConnector.PAGE_PROCESSING_DELAY;
@@ -38,7 +38,6 @@ import static com.facebook.presto.plugin.blackhole.BlackHoleConnector.ROWS_PER_P
 import static com.facebook.presto.plugin.blackhole.BlackHoleConnector.SPLIT_COUNT_PROPERTY;
 import static com.facebook.presto.plugin.blackhole.BlackHoleQueryRunner.createQueryRunner;
 import static com.facebook.presto.testing.TestingSession.testSessionBuilder;
-import static io.airlift.testing.Assertions.assertGreaterThan;
 import static java.lang.String.format;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -58,16 +57,30 @@ public class TestBlackHoleSmoke
         queryRunner = createQueryRunner();
     }
 
-    @AfterTest
+    @AfterTest(alwaysRun = true)
     public void tearDown()
     {
         assertThatNoBlackHoleTableIsCreated();
         queryRunner.close();
+        queryRunner = null;
+    }
+
+    @Test
+    public void testCreateSchema()
+    {
+        assertEquals(queryRunner.execute("SHOW SCHEMAS FROM blackhole").getRowCount(), 2);
+        assertThatQueryReturnsValue("CREATE TABLE nation as SELECT * FROM tpch.tiny.nation", 25L);
+
+        queryRunner.execute("CREATE SCHEMA blackhole.test");
+        assertEquals(queryRunner.execute("SHOW SCHEMAS FROM blackhole").getRowCount(), 3);
+        assertThatQueryReturnsValue("CREATE TABLE test.nation as SELECT * FROM tpch.tiny.nation", 25L);
+
+        assertThatQueryReturnsValue("DROP TABLE nation", true);
+        assertThatQueryReturnsValue("DROP TABLE test.nation", true);
     }
 
     @Test
     public void createTableWhenTableIsAlreadyCreated()
-            throws SQLException
     {
         String createTableSql = "CREATE TABLE nation as SELECT * FROM tpch.tiny.nation";
         queryRunner.execute(createTableSql);
@@ -85,7 +98,6 @@ public class TestBlackHoleSmoke
 
     @Test
     public void blackHoleConnectorUsage()
-            throws SQLException
     {
         assertThatQueryReturnsValue("CREATE TABLE nation as SELECT * FROM tpch.tiny.nation", 25L);
 
@@ -131,6 +143,24 @@ public class TestBlackHoleSmoke
                 "CREATE TABLE distributed_test WITH ( distributed_on = array['orderkey'] ) AS SELECT * FROM tpch.tiny.orders",
                 15000L);
         assertThatQueryReturnsValue("DROP TABLE distributed_test", true);
+    }
+
+    @Test
+    public void testCreateTableInNotExistSchema()
+    {
+        int tablesBeforeCreate = listBlackHoleTables().size();
+
+        String createTableSql = "CREATE TABLE schema1.test_table (x date)";
+        try {
+            queryRunner.execute(createTableSql);
+            fail("Expected exception to be thrown here!");
+        }
+        catch (RuntimeException ex) {
+            assertTrue(ex.getMessage().equals("Schema schema1 not found"));
+        }
+
+        int tablesAfterCreate = listBlackHoleTables().size();
+        assertEquals(tablesBeforeCreate, tablesAfterCreate);
     }
 
     @Test
@@ -197,7 +227,6 @@ public class TestBlackHoleSmoke
 
     @Test
     public void testInsertAllTypes()
-            throws Exception
     {
         createBlackholeAllTypesTable();
         assertThatQueryReturnsValue(
@@ -220,7 +249,6 @@ public class TestBlackHoleSmoke
 
     @Test
     public void testSelectAllTypes()
-            throws Exception
     {
         createBlackholeAllTypesTable();
         MaterializedResult rows = queryRunner.execute("SELECT * FROM blackhole_all_types");
@@ -235,8 +263,8 @@ public class TestBlackHoleSmoke
         assertEquals(row.getField(5), 0.0f);
         assertEquals(row.getField(6), 0.0);
         assertEquals(row.getField(7), false);
-        assertEquals(row.getField(8), new Date(0));
-        assertEquals(row.getField(9), new Timestamp(0));
+        assertEquals(row.getField(8), LocalDate.ofEpochDay(0));
+        assertEquals(row.getField(9), LocalDateTime.of(1969, 12, 31, 13, 0, 0)); // TODO #7122 should be 1970-01-01 00:00:00
         assertEquals(row.getField(10), "****************".getBytes());
         assertEquals(row.getField(11), new BigDecimal("0.00"));
         assertEquals(row.getField(12), new BigDecimal("00000000000000000000.0000000000"));
@@ -245,7 +273,6 @@ public class TestBlackHoleSmoke
 
     @Test
     public void testSelectWithUnenforcedConstraint()
-            throws Exception
     {
         createBlackholeAllTypesTable();
         MaterializedResult rows = queryRunner.execute("SELECT * FROM blackhole_all_types where _bigint > 10");
@@ -284,7 +311,6 @@ public class TestBlackHoleSmoke
 
     @Test
     public void pageProcessingDelay()
-            throws Exception
     {
         Session session = testSessionBuilder()
                 .setCatalog("blackhole")

@@ -13,10 +13,12 @@
  */
 package com.facebook.presto.raptor.storage.organization;
 
+import com.facebook.airlift.stats.CounterStat;
+import com.facebook.airlift.stats.DistributionStat;
+import com.facebook.presto.raptor.filesystem.FileSystemContext;
 import com.facebook.presto.raptor.metadata.ColumnInfo;
 import com.facebook.presto.raptor.metadata.ShardInfo;
 import com.facebook.presto.raptor.storage.ReaderAttributes;
-import com.facebook.presto.raptor.storage.Row;
 import com.facebook.presto.raptor.storage.StorageManager;
 import com.facebook.presto.raptor.storage.StoragePageSink;
 import com.facebook.presto.spi.ConnectorPageSource;
@@ -26,8 +28,6 @@ import com.facebook.presto.spi.block.SortOrder;
 import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.type.Type;
 import com.google.common.collect.ImmutableList;
-import io.airlift.stats.CounterStat;
-import io.airlift.stats.DistributionStat;
 import org.weakref.jmx.Managed;
 import org.weakref.jmx.Nested;
 
@@ -44,9 +44,8 @@ import java.util.Queue;
 import java.util.Set;
 import java.util.UUID;
 
-import static com.facebook.presto.raptor.storage.Row.extractRow;
+import static com.facebook.airlift.concurrent.MoreFutures.getFutureValue;
 import static com.google.common.base.Preconditions.checkArgument;
-import static io.airlift.concurrent.MoreFutures.getFutureValue;
 import static io.airlift.units.Duration.nanosSince;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toList;
@@ -77,7 +76,7 @@ public final class ShardCompactor
         List<Long> columnIds = columns.stream().map(ColumnInfo::getColumnId).collect(toList());
         List<Type> columnTypes = columns.stream().map(ColumnInfo::getType).collect(toList());
 
-        StoragePageSink storagePageSink = storageManager.createStoragePageSink(transactionId, bucketNumber, columnIds, columnTypes, false);
+        StoragePageSink storagePageSink = storageManager.createStoragePageSink(FileSystemContext.DEFAULT_RAPTOR_CONTEXT, transactionId, bucketNumber, columnIds, columnTypes, false);
 
         List<ShardInfo> shardInfos;
         try {
@@ -96,7 +95,7 @@ public final class ShardCompactor
             throws IOException
     {
         for (UUID uuid : uuids) {
-            try (ConnectorPageSource pageSource = storageManager.getPageSource(uuid, bucketNumber, columnIds, columnTypes, TupleDomain.all(), readerAttributes)) {
+            try (ConnectorPageSource pageSource = storageManager.getPageSource(FileSystemContext.DEFAULT_RAPTOR_CONTEXT, uuid, bucketNumber, columnIds, columnTypes, TupleDomain.all(), readerAttributes)) {
                 while (!pageSource.isFinished()) {
                     Page page = pageSource.getNextPage();
                     if (isNullOrEmptyPage(page)) {
@@ -128,23 +127,23 @@ public final class ShardCompactor
                 .map(columnIds::indexOf)
                 .collect(toList());
 
-        Queue<SortedRowSource> rowSources = new PriorityQueue<>();
-        StoragePageSink outputPageSink = storageManager.createStoragePageSink(transactionId, bucketNumber, columnIds, columnTypes, false);
+        Queue<SortedPageSource> rowSources = new PriorityQueue<>();
+        StoragePageSink outputPageSink = storageManager.createStoragePageSink(FileSystemContext.DEFAULT_RAPTOR_CONTEXT, transactionId, bucketNumber, columnIds, columnTypes, false);
         try {
             for (UUID uuid : uuids) {
-                ConnectorPageSource pageSource = storageManager.getPageSource(uuid, bucketNumber, columnIds, columnTypes, TupleDomain.all(), readerAttributes);
-                SortedRowSource rowSource = new SortedRowSource(pageSource, columnTypes, sortIndexes, sortOrders);
+                ConnectorPageSource pageSource = storageManager.getPageSource(FileSystemContext.DEFAULT_RAPTOR_CONTEXT, uuid, bucketNumber, columnIds, columnTypes, TupleDomain.all(), readerAttributes);
+                SortedPageSource rowSource = new SortedPageSource(pageSource, columnTypes, sortIndexes, sortOrders);
                 rowSources.add(rowSource);
             }
             while (!rowSources.isEmpty()) {
-                SortedRowSource rowSource = rowSources.poll();
+                SortedPageSource rowSource = rowSources.poll();
                 if (!rowSource.hasNext()) {
                     // rowSource is empty, close it
                     rowSource.close();
                     continue;
                 }
 
-                outputPageSink.appendRow(rowSource.next());
+                outputPageSink.appendPages(ImmutableList.of(rowSource.next()));
 
                 if (outputPageSink.isFull()) {
                     outputPageSink.flush();
@@ -164,12 +163,12 @@ public final class ShardCompactor
             throw e;
         }
         finally {
-            rowSources.forEach(SortedRowSource::closeQuietly);
+            rowSources.forEach(SortedPageSource::closeQuietly);
         }
     }
 
-    private static class SortedRowSource
-            implements Iterator<Row>, Comparable<SortedRowSource>, Closeable
+    private static class SortedPageSource
+            implements Iterator<Page>, Comparable<SortedPageSource>, Closeable
     {
         private final ConnectorPageSource pageSource;
         private final List<Type> columnTypes;
@@ -179,7 +178,7 @@ public final class ShardCompactor
         private Page currentPage;
         private int currentPosition;
 
-        public SortedRowSource(ConnectorPageSource pageSource, List<Type> columnTypes, List<Integer> sortIndexes, List<SortOrder> sortOrders)
+        public SortedPageSource(ConnectorPageSource pageSource, List<Type> columnTypes, List<Integer> sortIndexes, List<SortOrder> sortOrders)
         {
             this.pageSource = requireNonNull(pageSource, "pageSource is null");
             this.columnTypes = ImmutableList.copyOf(requireNonNull(columnTypes, "columnTypes is null"));
@@ -201,8 +200,7 @@ public final class ShardCompactor
             if (isNullOrEmptyPage(page)) {
                 return false;
             }
-            page.assureLoaded();
-            currentPage = page;
+            currentPage = page.getLoadedPage();
             currentPosition = 0;
             return true;
         }
@@ -213,26 +211,27 @@ public final class ShardCompactor
             while (isNullOrEmptyPage(page) && !pageSource.isFinished()) {
                 page = pageSource.getNextPage();
                 if (page != null) {
-                    page.assureLoaded();
+                    page = page.getLoadedPage();
                 }
             }
             return page;
         }
 
         @Override
-        public Row next()
+        public Page next()
         {
             if (!hasNext()) {
                 throw new NoSuchElementException();
             }
 
-            Row row = extractRow(currentPage, currentPosition, columnTypes);
+            int[] mask = {currentPosition};
+            Page page = currentPage.getPositions(mask, 0, 1);
             currentPosition++;
-            return row;
+            return page;
         }
 
         @Override
-        public int compareTo(SortedRowSource other)
+        public int compareTo(SortedPageSource other)
         {
             if (!hasNext()) {
                 return 1;

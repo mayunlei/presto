@@ -18,7 +18,6 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
-import io.airlift.log.Logger;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
@@ -42,8 +41,6 @@ import static java.util.Objects.requireNonNull;
 @ThreadSafe
 public final class PartitionedConsumption<T>
 {
-    private static final Logger log = Logger.get(PartitionedConsumption.class);
-
     private final int consumersCount;
     private final AtomicInteger consumed = new AtomicInteger();
     @Nullable
@@ -135,7 +132,8 @@ public final class PartitionedConsumption<T>
             this.requested = SettableFuture.create();
             this.loaded = Futures.transformAsync(
                     allAsList(requested, previousReleased),
-                    ignored -> loader.apply(partitionNumber));
+                    ignored -> loader.apply(partitionNumber),
+                    directExecutor());
             this.released = SettableFuture.create();
             released.addListener(() -> disposer.accept(partitionNumber), directExecutor());
             this.pendingReleases = consumersCount;

@@ -15,7 +15,6 @@ package com.facebook.presto.operator.scalar;
 
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.block.BlockBuilderStatus;
 import com.facebook.presto.spi.function.Description;
 import com.facebook.presto.spi.function.ScalarFunction;
 import com.facebook.presto.spi.function.SqlNullable;
@@ -30,7 +29,7 @@ import static com.facebook.presto.type.UnknownType.UNKNOWN;
 import static com.facebook.presto.util.Failures.checkCondition;
 import static java.lang.Math.toIntExact;
 
-@ScalarFunction("repeat")
+@ScalarFunction(value = "repeat", calledOnNullInput = true)
 @Description("Repeat an element for a given number of times")
 public final class RepeatFunction
 {
@@ -41,7 +40,7 @@ public final class RepeatFunction
 
     @SqlType("array(unknown)")
     public static Block repeat(
-            @SqlNullable @SqlType("unknown") Void element,
+            @SqlNullable @SqlType("unknown") Boolean element,
             @SqlType(StandardTypes.INTEGER) long count)
     {
         checkCondition(element == null, INVALID_FUNCTION_ARGUMENT, "expect null values");
@@ -146,7 +145,7 @@ public final class RepeatFunction
     {
         checkCondition(count <= MAX_RESULT_ENTRIES, INVALID_FUNCTION_ARGUMENT, "count argument of repeat function must be less than or equal to 10000");
         checkCondition(count >= 0, INVALID_FUNCTION_ARGUMENT, "count argument of repeat function must be greater than or equal to 0");
-        return type.createBlockBuilder(new BlockBuilderStatus(), toIntExact(count));
+        return type.createBlockBuilder(null, toIntExact(count));
     }
 
     private static Block repeatNullValues(BlockBuilder blockBuilder, long count)

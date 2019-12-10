@@ -13,38 +13,43 @@
  */
 package com.facebook.presto.server;
 
-import com.facebook.presto.discovery.EmbeddedDiscoveryModule;
+import com.facebook.airlift.bootstrap.Bootstrap;
+import com.facebook.airlift.discovery.client.Announcer;
+import com.facebook.airlift.discovery.client.DiscoveryModule;
+import com.facebook.airlift.discovery.client.ServiceAnnouncement;
+import com.facebook.airlift.event.client.HttpEventModule;
+import com.facebook.airlift.event.client.JsonEventModule;
+import com.facebook.airlift.http.server.HttpServerModule;
+import com.facebook.airlift.jaxrs.JaxrsModule;
+import com.facebook.airlift.jmx.JmxHttpModule;
+import com.facebook.airlift.jmx.JmxModule;
+import com.facebook.airlift.json.JsonModule;
+import com.facebook.airlift.log.LogJmxModule;
+import com.facebook.airlift.log.Logger;
+import com.facebook.airlift.node.NodeModule;
+import com.facebook.airlift.tracetoken.TraceTokenModule;
 import com.facebook.presto.eventlistener.EventListenerManager;
 import com.facebook.presto.eventlistener.EventListenerModule;
 import com.facebook.presto.execution.resourceGroups.ResourceGroupManager;
 import com.facebook.presto.execution.scheduler.NodeSchedulerConfig;
+import com.facebook.presto.execution.warnings.WarningCollectorModule;
 import com.facebook.presto.metadata.Catalog;
 import com.facebook.presto.metadata.CatalogManager;
 import com.facebook.presto.metadata.StaticCatalogStore;
+import com.facebook.presto.metadata.StaticFunctionNamespaceStore;
 import com.facebook.presto.security.AccessControlManager;
 import com.facebook.presto.security.AccessControlModule;
+import com.facebook.presto.server.security.PasswordAuthenticatorManager;
 import com.facebook.presto.server.security.ServerSecurityModule;
+import com.facebook.presto.server.smile.SmileModule;
+import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.facebook.presto.sql.parser.SqlParserOptions;
+import com.fasterxml.jackson.module.afterburner.AfterburnerModule;
 import com.google.common.base.Joiner;
 import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableList;
 import com.google.inject.Injector;
 import com.google.inject.Module;
-import io.airlift.bootstrap.Bootstrap;
-import io.airlift.discovery.client.Announcer;
-import io.airlift.discovery.client.DiscoveryModule;
-import io.airlift.discovery.client.ServiceAnnouncement;
-import io.airlift.event.client.HttpEventModule;
-import io.airlift.event.client.JsonEventModule;
-import io.airlift.http.server.HttpServerModule;
-import io.airlift.jaxrs.JaxrsModule;
-import io.airlift.jmx.JmxHttpModule;
-import io.airlift.jmx.JmxModule;
-import io.airlift.json.JsonModule;
-import io.airlift.log.LogJmxModule;
-import io.airlift.log.Logger;
-import io.airlift.node.NodeModule;
-import io.airlift.tracetoken.TraceTokenModule;
 import org.weakref.jmx.guice.MBeanModule;
 
 import java.util.LinkedHashSet;
@@ -52,11 +57,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import static com.facebook.airlift.configuration.ConditionalModule.installModuleIf;
+import static com.facebook.airlift.discovery.client.ServiceAnnouncement.ServiceAnnouncementBuilder;
+import static com.facebook.airlift.discovery.client.ServiceAnnouncement.serviceAnnouncement;
+import static com.facebook.airlift.json.JsonBinder.jsonBinder;
 import static com.facebook.presto.server.PrestoSystemRequirements.verifyJvmRequirements;
 import static com.facebook.presto.server.PrestoSystemRequirements.verifySystemTimeIsReasonable;
 import static com.google.common.base.Strings.nullToEmpty;
-import static io.airlift.discovery.client.ServiceAnnouncement.ServiceAnnouncementBuilder;
-import static io.airlift.discovery.client.ServiceAnnouncement.serviceAnnouncement;
 import static java.util.Objects.requireNonNull;
 
 public class PrestoServer
@@ -93,6 +100,11 @@ public class PrestoServer
                 new DiscoveryModule(),
                 new HttpServerModule(),
                 new JsonModule(),
+                installModuleIf(
+                        FeaturesConfig.class,
+                        FeaturesConfig::isJsonSerdeCodeGenerationEnabled,
+                        binder -> jsonBinder(binder).addModuleBinding().to(AfterburnerModule.class)),
+                new SmileModule(),
                 new JaxrsModule(true),
                 new MBeanModule(),
                 new JmxModule(),
@@ -101,12 +113,12 @@ public class PrestoServer
                 new TraceTokenModule(),
                 new JsonEventModule(),
                 new HttpEventModule(),
-                new EmbeddedDiscoveryModule(),
                 new ServerSecurityModule(),
                 new AccessControlModule(),
                 new EventListenerModule(),
                 new ServerMainModule(sqlParserOptions),
-                new GracefulShutdownModule());
+                new GracefulShutdownModule(),
+                new WarningCollectorModule());
 
         modules.addAll(getAdditionalModules());
 
@@ -126,9 +138,11 @@ public class PrestoServer
                     injector.getInstance(ServerConfig.class),
                     injector.getInstance(NodeSchedulerConfig.class));
 
-            injector.getInstance(SessionSupplier.class).loadConfigurationManager();
+            injector.getInstance(StaticFunctionNamespaceStore.class).loadFunctionNamespaceManagers();
+            injector.getInstance(SessionPropertyDefaults.class).loadConfigurationManager();
             injector.getInstance(ResourceGroupManager.class).loadConfigurationManager();
             injector.getInstance(AccessControlManager.class).loadSystemAccessControl();
+            injector.getInstance(PasswordAuthenticatorManager.class).loadPasswordAuthenticator();
             injector.getInstance(EventListenerManager.class).loadConfiguredEventListener();
 
             injector.getInstance(Announcer.class).start();

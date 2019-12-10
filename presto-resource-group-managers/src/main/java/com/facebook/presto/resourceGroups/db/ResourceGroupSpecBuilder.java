@@ -17,8 +17,8 @@ import com.facebook.presto.resourceGroups.ResourceGroupNameTemplate;
 import com.facebook.presto.resourceGroups.ResourceGroupSpec;
 import com.google.common.collect.ImmutableList;
 import io.airlift.units.Duration;
-import org.skife.jdbi.v2.StatementContext;
-import org.skife.jdbi.v2.tweak.ResultSetMapper;
+import org.jdbi.v3.core.mapper.RowMapper;
+import org.jdbi.v3.core.statement.StatementContext;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -39,8 +39,6 @@ public class ResourceGroupSpecBuilder
     private final Optional<Boolean> jmxExport;
     private final Optional<Duration> softCpuLimit;
     private final Optional<Duration> hardCpuLimit;
-    private final Optional<Duration> queuedTimeLimit;
-    private final Optional<Duration> runningTimeLimit;
     private final Optional<Long> parentId;
     private final ImmutableList.Builder<ResourceGroupSpec> subGroups = ImmutableList.builder();
 
@@ -56,8 +54,6 @@ public class ResourceGroupSpecBuilder
             Optional<Boolean> jmxExport,
             Optional<String> softCpuLimit,
             Optional<String> hardCpuLimit,
-            Optional<String> queuedTimeLimit,
-            Optional<String> runningTimeLimit,
             Optional<Long> parentId)
     {
         this.id = id;
@@ -71,8 +67,6 @@ public class ResourceGroupSpecBuilder
         this.jmxExport = requireNonNull(jmxExport, "jmxExport is null");
         this.softCpuLimit = requireNonNull(softCpuLimit, "softCpuLimit is null").map(Duration::valueOf);
         this.hardCpuLimit = requireNonNull(hardCpuLimit, "hardCpuLimit is null").map(Duration::valueOf);
-        this.queuedTimeLimit = requireNonNull(queuedTimeLimit, "queuedTimeLimit is null").map(Duration::valueOf);
-        this.runningTimeLimit = requireNonNull(runningTimeLimit, "runningTimeLimit is null").map(Duration::valueOf);
         this.parentId = parentId;
     }
 
@@ -120,16 +114,14 @@ public class ResourceGroupSpecBuilder
                 Optional.of(subGroups.build()),
                 jmxExport,
                 softCpuLimit,
-                hardCpuLimit,
-                queuedTimeLimit,
-                runningTimeLimit);
+                hardCpuLimit);
     }
 
     public static class Mapper
-            implements ResultSetMapper<ResourceGroupSpecBuilder>
+            implements RowMapper<ResourceGroupSpecBuilder>
     {
         @Override
-        public ResourceGroupSpecBuilder map(int index, ResultSet resultSet, StatementContext context)
+        public ResourceGroupSpecBuilder map(ResultSet resultSet, StatementContext context)
                 throws SQLException
         {
             long id = resultSet.getLong("resource_group_id");
@@ -156,8 +148,6 @@ public class ResourceGroupSpecBuilder
             if (resultSet.wasNull()) {
                 parentId = Optional.empty();
             }
-            Optional<String> queuedTimeLimit = Optional.ofNullable(resultSet.getString("queued_time_limit"));
-            Optional<String> runningTimeLimit = Optional.ofNullable(resultSet.getString("running_time_limit"));
             return new ResourceGroupSpecBuilder(
                     id,
                     nameTemplate,
@@ -170,8 +160,6 @@ public class ResourceGroupSpecBuilder
                     jmxExport,
                     softCpuLimit,
                     hardCpuLimit,
-                    queuedTimeLimit,
-                    runningTimeLimit,
                     parentId);
         }
     }

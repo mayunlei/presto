@@ -13,20 +13,18 @@
  */
 package com.facebook.presto.kafka;
 
+import com.facebook.airlift.log.Logger;
 import com.facebook.presto.spi.HostAddress;
 import com.facebook.presto.spi.NodeManager;
-import com.google.common.base.Throwables;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
-import io.airlift.log.Logger;
 import kafka.javaapi.consumer.SimpleConsumer;
 
 import javax.annotation.PreDestroy;
 import javax.inject.Inject;
 
 import java.util.Map;
-import java.util.concurrent.ExecutionException;
 
 import static java.lang.Math.toIntExact;
 import static java.lang.String.format;
@@ -79,12 +77,7 @@ public class KafkaSimpleConsumerManager
     public SimpleConsumer getConsumer(HostAddress host)
     {
         requireNonNull(host, "host is null");
-        try {
-            return consumerCache.get(host);
-        }
-        catch (ExecutionException e) {
-            throw Throwables.propagate(e.getCause());
-        }
+        return consumerCache.getUnchecked(host);
     }
 
     private SimpleConsumer createConsumer(HostAddress host)

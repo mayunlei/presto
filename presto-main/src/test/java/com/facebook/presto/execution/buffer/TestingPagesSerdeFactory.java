@@ -13,10 +13,11 @@
  */
 package com.facebook.presto.execution.buffer;
 
+import com.facebook.presto.block.BlockEncodingManager;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.block.BlockEncodingSerde;
-import com.facebook.presto.spi.block.TestingBlockEncodingSerde;
 import com.facebook.presto.spi.type.TestingTypeManager;
+import com.facebook.presto.spiller.SpillCipher;
 import io.airlift.compress.Compressor;
 import io.airlift.compress.Decompressor;
 import io.airlift.compress.lz4.Lz4Compressor;
@@ -30,23 +31,24 @@ public class TestingPagesSerdeFactory
     public TestingPagesSerdeFactory()
     {
         // compression should be enabled in as many tests as possible
-        super(new TestingBlockEncodingSerde(new TestingTypeManager()), true);
+        super(new BlockEncodingManager(new TestingTypeManager()), true);
     }
 
     public static PagesSerde testingPagesSerde()
     {
         return new SynchronizedPagesSerde(
-                new TestingBlockEncodingSerde(new TestingTypeManager()),
+                new BlockEncodingManager(new TestingTypeManager()),
                 Optional.of(new Lz4Compressor()),
-                Optional.of(new Lz4Decompressor()));
+                Optional.of(new Lz4Decompressor()),
+                Optional.empty());
     }
 
     private static class SynchronizedPagesSerde
             extends PagesSerde
     {
-        public SynchronizedPagesSerde(BlockEncodingSerde blockEncodingSerde, Optional<Compressor> compressor, Optional<Decompressor> decompressor)
+        public SynchronizedPagesSerde(BlockEncodingSerde blockEncodingSerde, Optional<Compressor> compressor, Optional<Decompressor> decompressor, Optional<SpillCipher> spillCipher)
         {
-            super(blockEncodingSerde, compressor, decompressor);
+            super(blockEncodingSerde, compressor, decompressor, spillCipher);
         }
 
         @Override

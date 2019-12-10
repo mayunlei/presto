@@ -14,12 +14,13 @@
 package com.facebook.presto.sql.planner.assertions;
 
 import com.facebook.presto.Session;
-import com.facebook.presto.cost.PlanNodeCost;
+import com.facebook.presto.cost.StatsProvider;
 import com.facebook.presto.metadata.Metadata;
-import com.facebook.presto.sql.planner.Symbol;
+import com.facebook.presto.spi.plan.PlanNode;
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.plan.ApplyNode;
 import com.facebook.presto.sql.planner.plan.LateralJoinNode;
-import com.facebook.presto.sql.planner.plan.PlanNode;
+import com.facebook.presto.sql.tree.SymbolReference;
 
 import java.util.List;
 
@@ -46,28 +47,28 @@ public class CorrelationMatcher
     }
 
     @Override
-    public MatchResult detailMatches(PlanNode node, PlanNodeCost cost, Session session, Metadata metadata, SymbolAliases symbolAliases)
+    public MatchResult detailMatches(PlanNode node, StatsProvider stats, Session session, Metadata metadata, SymbolAliases symbolAliases)
     {
         checkState(
                 shapeMatches(node),
                 "Plan testing framework error: shapeMatches returned false in detailMatches in %s",
                 this.getClass().getName());
 
-        List<Symbol> actualCorrelation = getCorrelation(node);
+        List<VariableReferenceExpression> actualCorrelation = getCorrelation(node);
         if (this.correlation.size() != actualCorrelation.size()) {
             return NO_MATCH;
         }
 
         int i = 0;
         for (String alias : this.correlation) {
-            if (!symbolAliases.get(alias).equals(actualCorrelation.get(i++).toSymbolReference())) {
+            if (!symbolAliases.get(alias).equals(new SymbolReference(actualCorrelation.get(i++).getName()))) {
                 return NO_MATCH;
             }
         }
         return match();
     }
 
-    private List<Symbol> getCorrelation(PlanNode node)
+    private List<VariableReferenceExpression> getCorrelation(PlanNode node)
     {
         if (node instanceof ApplyNode) {
             return ((ApplyNode) node).getCorrelation();

@@ -14,18 +14,15 @@
 package com.facebook.presto.sql.planner.optimizations;
 
 import com.facebook.presto.spi.block.SortOrder;
-import com.facebook.presto.sql.planner.Plan;
-import com.facebook.presto.sql.planner.StatsRecorder;
+import com.facebook.presto.sql.planner.RuleStatsRecorder;
 import com.facebook.presto.sql.planner.assertions.BasePlanTest;
 import com.facebook.presto.sql.planner.assertions.ExpectedValueProvider;
-import com.facebook.presto.sql.planner.assertions.PlanAssert;
 import com.facebook.presto.sql.planner.assertions.PlanMatchPattern;
 import com.facebook.presto.sql.planner.iterative.IterativeOptimizer;
 import com.facebook.presto.sql.planner.iterative.rule.GatherAndMergeWindows;
 import com.facebook.presto.sql.planner.iterative.rule.RemoveRedundantIdentityProjections;
 import com.facebook.presto.sql.planner.plan.WindowNode;
 import com.facebook.presto.sql.tree.WindowFrame;
-import com.facebook.presto.testing.LocalQueryRunner;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -181,39 +178,33 @@ public class TestReorderWindows
     @Test
     public void testPrefixOfPartitionComesFirstRegardlessOfTheirOrderInSQL()
     {
-        {
-            @Language("SQL") String sql = "select " +
-                    "avg(discount) over(PARTITION BY suppkey, tax ORDER BY receiptdate ASC NULLS LAST) avg_discount_A, " +
-                    "sum(quantity) over(PARTITION BY suppkey ORDER BY orderkey ASC NULLS LAST) sum_quantity_A " +
-                    "from lineitem";
+        assertUnitPlan(
+                "select " +
+                        "avg(discount) over(PARTITION BY suppkey, tax ORDER BY receiptdate ASC NULLS LAST) avg_discount_A, " +
+                        "sum(quantity) over(PARTITION BY suppkey ORDER BY orderkey ASC NULLS LAST) sum_quantity_A " +
+                        "from lineitem",
+                anyTree(
+                        window(windowMatcherBuilder -> windowMatcherBuilder
+                                        .specification(windowApp)
+                                        .addFunction(functionCall("avg", commonFrame, ImmutableList.of(DISCOUNT_ALIAS))),
+                                window(windowMatcherBuilder -> windowMatcherBuilder
+                                                .specification(windowA)
+                                                .addFunction(functionCall("sum", commonFrame, ImmutableList.of(QUANTITY_ALIAS))),
+                                        LINEITEM_TABLESCAN_DOQRST)))); // should be anyTree(LINEITEM_TABLESCAN_DOQRST) but anyTree does not handle zero nodes case correctly
 
-            assertUnitPlan(sql,
-                    anyTree(
-                            window(windowMatcherBuilder -> windowMatcherBuilder
-                                            .specification(windowApp)
-                                            .addFunction(functionCall("avg", commonFrame, ImmutableList.of(DISCOUNT_ALIAS))),
-                                    window(windowMatcherBuilder -> windowMatcherBuilder
-                                                    .specification(windowA)
-                                                    .addFunction(functionCall("sum", commonFrame, ImmutableList.of(QUANTITY_ALIAS))),
-                                            LINEITEM_TABLESCAN_DOQRST)))); // should be anyTree(LINEITEM_TABLESCAN_DOQRST) but anyTree does not handle zero nodes case correctly
-        }
-
-        {
-            @Language("SQL") String sql = "select " +
-                    "sum(quantity) over(PARTITION BY suppkey ORDER BY orderkey ASC NULLS LAST) sum_quantity_A, " +
-                    "avg(discount) over(PARTITION BY suppkey, tax ORDER BY receiptdate ASC NULLS LAST) avg_discount_A " +
-                    "from lineitem";
-
-            assertUnitPlan(sql,
-                    anyTree(
-                            window(windowMatcherBuilder -> windowMatcherBuilder
-                                            .specification(windowApp)
-                                            .addFunction(functionCall("avg", commonFrame, ImmutableList.of(DISCOUNT_ALIAS))),
-                                    window(windowMatcherBuilder -> windowMatcherBuilder
-                                                    .specification(windowA)
-                                                    .addFunction(functionCall("sum", commonFrame, ImmutableList.of(QUANTITY_ALIAS))),
-                                            LINEITEM_TABLESCAN_DOQRST)))); // should be anyTree(LINEITEM_TABLESCAN_DOQRST) but anyTree does not handle zero nodes case correctly
-        }
+        assertUnitPlan(
+                "select " +
+                        "sum(quantity) over(PARTITION BY suppkey ORDER BY orderkey ASC NULLS LAST) sum_quantity_A, " +
+                        "avg(discount) over(PARTITION BY suppkey, tax ORDER BY receiptdate ASC NULLS LAST) avg_discount_A " +
+                        "from lineitem",
+                anyTree(
+                        window(windowMatcherBuilder -> windowMatcherBuilder
+                                        .specification(windowApp)
+                                        .addFunction(functionCall("avg", commonFrame, ImmutableList.of(DISCOUNT_ALIAS))),
+                                window(windowMatcherBuilder -> windowMatcherBuilder
+                                                .specification(windowA)
+                                                .addFunction(functionCall("sum", commonFrame, ImmutableList.of(QUANTITY_ALIAS))),
+                                        LINEITEM_TABLESCAN_DOQRST)))); // should be anyTree(LINEITEM_TABLESCAN_DOQRST) but anyTree does not handle zero nodes case correctly
     }
 
     @Test
@@ -237,7 +228,7 @@ public class TestReorderWindows
     }
 
     @Test
-    public void testNotReorderAcrossFilter()
+    public void testNotReorderAcrossNonPartitionFilter()
     {
         @Language("SQL") String sql = "" +
                 "SELECT " +
@@ -255,13 +246,38 @@ public class TestReorderWindows
                         window(windowMatcherBuilder -> windowMatcherBuilder
                                         .specification(windowA)
                                         .addFunction(functionCall("avg", commonFrame, ImmutableList.of(QUANTITY_ALIAS))),
-                                filter(
-                                        RECEIPTDATE_ALIAS + " IS NOT NULL",
-                                        project(
+                                project(
+                                        filter(RECEIPTDATE_ALIAS + " IS NOT NULL",
                                                 window(windowMatcherBuilder -> windowMatcherBuilder
                                                                 .specification(windowApp)
                                                                 .addFunction(functionCall("avg", commonFrame, ImmutableList.of(DISCOUNT_ALIAS))),
-                                                        LINEITEM_TABLESCAN_DOQRST)))))); // should be anyTree(LINEITEM_TABLESCAN_DOQRST) but anyTree does not handle zero nodes case correctly
+                                                        LINEITEM_TABLESCAN_DOQRST)))))); // should be anyTree(LINEITEM_TABLESCAN_DOQPRSST) but anyTree does not handle zero nodes case correctly
+    }
+
+    @Test
+    public void testReorderAcrossPartitionFilter()
+    {
+        @Language("SQL") String sql = "" +
+                "SELECT " +
+                "  avg_discount_APP, " +
+                "  AVG(quantity) OVER(PARTITION BY suppkey ORDER BY orderkey ASC NULLS LAST) avg_quantity_A " +
+                "FROM ( " +
+                "   SELECT " +
+                "     *, " +
+                "     AVG(discount) OVER(PARTITION BY suppkey, tax ORDER BY receiptdate ASC NULLS LAST) avg_discount_APP " +
+                "   FROM lineitem) " +
+                "WHERE suppkey > 0";
+
+        assertUnitPlan(sql,
+                anyTree(
+                        window(windowMatcherBuilder -> windowMatcherBuilder
+                                        .specification(windowApp)
+                                        .addFunction(functionCall("avg", commonFrame, ImmutableList.of(DISCOUNT_ALIAS))),
+                                window(windowMatcherBuilder -> windowMatcherBuilder
+                                                .specification(windowA)
+                                                .addFunction(functionCall("avg", commonFrame, ImmutableList.of(QUANTITY_ALIAS))),
+                                        filter("SUPPKEY > BIGINT '0'",
+                                                LINEITEM_TABLESCAN_DOQRST)))));
     }
 
     @Test
@@ -304,20 +320,19 @@ public class TestReorderWindows
 
     private void assertUnitPlan(@Language("SQL") String sql, PlanMatchPattern pattern)
     {
-        LocalQueryRunner queryRunner = getQueryRunner();
         List<PlanOptimizer> optimizers = ImmutableList.of(
-                new UnaliasSymbolReferences(),
-                new IterativeOptimizer(new StatsRecorder(),
+                new UnaliasSymbolReferences(getMetadata().getFunctionManager()),
+                new PredicatePushDown(getMetadata(), getQueryRunner().getSqlParser()),
+                new IterativeOptimizer(
+                        new RuleStatsRecorder(),
+                        getQueryRunner().getStatsCalculator(),
+                        getQueryRunner().getEstimatedExchangesCostCalculator(),
                         ImmutableSet.of(
                                 new RemoveRedundantIdentityProjections(),
                                 new GatherAndMergeWindows.SwapAdjacentWindowsBySpecifications(0),
                                 new GatherAndMergeWindows.SwapAdjacentWindowsBySpecifications(1),
                                 new GatherAndMergeWindows.SwapAdjacentWindowsBySpecifications(2))),
                 new PruneUnreferencedOutputs());
-        queryRunner.inTransaction(transactionSession -> {
-            Plan actualPlan = queryRunner.createPlan(transactionSession, sql, optimizers);
-            PlanAssert.assertPlan(transactionSession, queryRunner.getMetadata(), queryRunner.getCostCalculator(), actualPlan, pattern);
-            return null;
-        });
+        assertPlan(sql, pattern, optimizers);
     }
 }

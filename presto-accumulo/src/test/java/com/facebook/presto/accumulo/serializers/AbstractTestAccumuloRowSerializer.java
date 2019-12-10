@@ -14,7 +14,7 @@
 package com.facebook.presto.accumulo.serializers;
 
 import com.facebook.presto.block.BlockEncodingManager;
-import com.facebook.presto.metadata.FunctionRegistry;
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.spi.type.ArrayType;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
@@ -27,13 +27,13 @@ import com.google.common.collect.ImmutableMap;
 import org.apache.accumulo.core.data.Key;
 import org.apache.accumulo.core.data.Mutation;
 import org.apache.accumulo.core.data.Value;
-import org.joda.time.DateTime;
-import org.joda.time.DateTimeZone;
 import org.testng.annotations.Test;
 
 import java.sql.Date;
 import java.sql.Time;
 import java.sql.Timestamp;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.AbstractMap.SimpleImmutableEntry;
 import java.util.List;
 import java.util.Map;
@@ -108,7 +108,7 @@ public abstract class AbstractTestAccumuloRowSerializer
     public void testDate()
             throws Exception
     {
-        Date expected = new Date(new DateTime(2001, 2, 3, 4, 5, 6, DateTimeZone.UTC).getMillis());
+        Date expected = new Date(ZonedDateTime.of(2001, 2, 3, 4, 5, 6, 0, ZoneId.of("UTC")).toEpochSecond());
         AccumuloRowSerializer serializer = serializerClass.getConstructor().newInstance();
         byte[] data = serializer.encode(DATE, expected);
 
@@ -189,8 +189,8 @@ public abstract class AbstractTestAccumuloRowSerializer
             throws Exception
     {
         TypeManager typeManager = new TypeRegistry();
-        // associate typeManager with a function registry
-        new FunctionRegistry(typeManager, new BlockEncodingManager(typeManager), new FeaturesConfig());
+        // associate typeManager with a function manager
+        new FunctionManager(typeManager, new BlockEncodingManager(typeManager), new FeaturesConfig());
 
         AccumuloRowSerializer serializer = serializerClass.getConstructor().newInstance();
         Type type = typeManager.getParameterizedType(StandardTypes.MAP, ImmutableList.of(
@@ -303,7 +303,6 @@ public abstract class AbstractTestAccumuloRowSerializer
     }
 
     protected void deserializeData(AccumuloRowSerializer serializer, byte[] data)
-            throws Exception
     {
         Mutation m = new Mutation("row");
         m.put(b("a"), b("a"), data);

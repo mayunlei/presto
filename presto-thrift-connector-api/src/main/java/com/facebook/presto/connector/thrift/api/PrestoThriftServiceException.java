@@ -13,13 +13,13 @@
  */
 package com.facebook.presto.connector.thrift.api;
 
-import com.facebook.swift.codec.ThriftConstructor;
-import com.facebook.swift.codec.ThriftField;
-import com.facebook.swift.codec.ThriftStruct;
+import com.facebook.drift.annotations.ThriftConstructor;
+import com.facebook.drift.annotations.ThriftField;
+import com.facebook.drift.annotations.ThriftStruct;
 
 @ThriftStruct
 public final class PrestoThriftServiceException
-        extends RuntimeException
+        extends Exception
 {
     private final boolean retryable;
 

@@ -15,14 +15,14 @@ package com.facebook.presto.operator.scalar;
 
 import com.facebook.presto.annotation.UsedByGeneratedCode;
 import com.facebook.presto.metadata.BoundVariables;
-import com.facebook.presto.metadata.FunctionKind;
-import com.facebook.presto.metadata.FunctionRegistry;
-import com.facebook.presto.metadata.Signature;
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.SqlScalarFunction;
-import com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentProperty;
+import com.facebook.presto.operator.scalar.BuiltInScalarFunctionImplementation.ArgumentProperty;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.block.BlockBuilderStatus;
+import com.facebook.presto.spi.function.FunctionKind;
+import com.facebook.presto.spi.function.QualifiedFunctionName;
+import com.facebook.presto.spi.function.Signature;
 import com.facebook.presto.spi.type.RowType;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
@@ -31,11 +31,11 @@ import com.google.common.collect.ImmutableList;
 
 import java.lang.invoke.MethodHandle;
 import java.util.List;
-import java.util.Optional;
 import java.util.stream.IntStream;
 
-import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
-import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
+import static com.facebook.presto.metadata.BuiltInFunctionNamespaceManager.DEFAULT_NAMESPACE;
+import static com.facebook.presto.operator.scalar.BuiltInScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
+import static com.facebook.presto.operator.scalar.BuiltInScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.util.Reflection.methodHandle;
 import static com.google.common.collect.ImmutableList.toImmutableList;
@@ -47,7 +47,7 @@ public final class ZipFunction
         extends SqlScalarFunction
 {
     public static final int MIN_ARITY = 2;
-    public static final int MAX_ARITY = 4;
+    public static final int MAX_ARITY = 5;
     public static final ZipFunction[] ZIP_FUNCTIONS;
 
     private static final MethodHandle METHOD_HANDLE = methodHandle(ZipFunction.class, "zip", List.class, Block[].class);
@@ -68,7 +68,8 @@ public final class ZipFunction
 
     private ZipFunction(List<String> typeParameters)
     {
-        super(new Signature("zip",
+        super(new Signature(
+                QualifiedFunctionName.of(DEFAULT_NAMESPACE, "zip"),
                 FunctionKind.SCALAR,
                 typeParameters.stream().map(Signature::typeVariable).collect(toImmutableList()),
                 ImmutableList.of(),
@@ -97,13 +98,13 @@ public final class ZipFunction
     }
 
     @Override
-    public ScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
+    public BuiltInScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionManager functionManager)
     {
         List<Type> types = this.typeParameters.stream().map(boundVariables::getTypeVariable).collect(toImmutableList());
         List<ArgumentProperty> argumentProperties = nCopies(types.size(), valueTypeArgumentProperty(RETURN_NULL_ON_NULL));
         List<Class<?>> javaArgumentTypes = nCopies(types.size(), Block.class);
         MethodHandle methodHandle = METHOD_HANDLE.bindTo(types).asVarargsCollector(Block[].class).asType(methodType(Block.class, javaArgumentTypes));
-        return new ScalarFunctionImplementation(false, argumentProperties, methodHandle, isDeterministic());
+        return new BuiltInScalarFunctionImplementation(false, argumentProperties, methodHandle);
     }
 
     @UsedByGeneratedCode
@@ -113,8 +114,8 @@ public final class ZipFunction
         for (Block array : arrays) {
             biggestCardinality = Math.max(biggestCardinality, array.getPositionCount());
         }
-        RowType rowType = new RowType(types, Optional.empty());
-        BlockBuilder outputBuilder = rowType.createBlockBuilder(new BlockBuilderStatus(), biggestCardinality);
+        RowType rowType = RowType.anonymous(types);
+        BlockBuilder outputBuilder = rowType.createBlockBuilder(null, biggestCardinality);
         for (int outputPosition = 0; outputPosition < biggestCardinality; outputPosition++) {
             BlockBuilder rowBuilder = outputBuilder.beginBlockEntry();
             for (int fieldIndex = 0; fieldIndex < arrays.length; fieldIndex++) {

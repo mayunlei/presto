@@ -24,9 +24,7 @@ import com.facebook.presto.bytecode.Variable;
 import com.facebook.presto.bytecode.control.ForLoop;
 import com.facebook.presto.bytecode.control.IfStatement;
 import com.facebook.presto.metadata.BoundVariables;
-import com.facebook.presto.metadata.FunctionKind;
-import com.facebook.presto.metadata.FunctionRegistry;
-import com.facebook.presto.metadata.Signature;
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.SqlScalarFunction;
 import com.facebook.presto.operator.aggregation.TypedSet;
 import com.facebook.presto.spi.ConnectorSession;
@@ -35,6 +33,9 @@ import com.facebook.presto.spi.PageBuilder;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
+import com.facebook.presto.spi.function.FunctionKind;
+import com.facebook.presto.spi.function.QualifiedFunctionName;
+import com.facebook.presto.spi.function.Signature;
 import com.facebook.presto.spi.type.MapType;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
@@ -54,8 +55,6 @@ import static com.facebook.presto.bytecode.Access.PRIVATE;
 import static com.facebook.presto.bytecode.Access.PUBLIC;
 import static com.facebook.presto.bytecode.Access.STATIC;
 import static com.facebook.presto.bytecode.Access.a;
-import static com.facebook.presto.bytecode.CompilerUtils.defineClass;
-import static com.facebook.presto.bytecode.CompilerUtils.makeClassName;
 import static com.facebook.presto.bytecode.Parameter.arg;
 import static com.facebook.presto.bytecode.ParameterizedType.type;
 import static com.facebook.presto.bytecode.expression.BytecodeExpressions.add;
@@ -71,14 +70,17 @@ import static com.facebook.presto.bytecode.expression.BytecodeExpressions.newArr
 import static com.facebook.presto.bytecode.expression.BytecodeExpressions.newInstance;
 import static com.facebook.presto.bytecode.expression.BytecodeExpressions.subtract;
 import static com.facebook.presto.bytecode.instruction.VariableInstruction.incrementVariable;
-import static com.facebook.presto.metadata.Signature.typeVariable;
-import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentProperty.functionTypeArgumentProperty;
-import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
-import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
+import static com.facebook.presto.metadata.BuiltInFunctionNamespaceManager.DEFAULT_NAMESPACE;
+import static com.facebook.presto.operator.scalar.BuiltInScalarFunctionImplementation.ArgumentProperty.functionTypeArgumentProperty;
+import static com.facebook.presto.operator.scalar.BuiltInScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
+import static com.facebook.presto.operator.scalar.BuiltInScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
+import static com.facebook.presto.spi.function.Signature.typeVariable;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.sql.gen.SqlTypeBytecodeExpression.constantType;
 import static com.facebook.presto.type.UnknownType.UNKNOWN;
+import static com.facebook.presto.util.CompilerUtils.defineClass;
+import static com.facebook.presto.util.CompilerUtils.makeClassName;
 import static com.facebook.presto.util.Reflection.methodHandle;
 
 public final class MapTransformKeyFunction
@@ -90,7 +92,7 @@ public final class MapTransformKeyFunction
     private MapTransformKeyFunction()
     {
         super(new Signature(
-                "transform_keys",
+                QualifiedFunctionName.of(DEFAULT_NAMESPACE, "transform_keys"),
                 FunctionKind.SCALAR,
                 ImmutableList.of(typeVariable("K1"), typeVariable("K2"), typeVariable("V")),
                 ImmutableList.of(),
@@ -118,7 +120,7 @@ public final class MapTransformKeyFunction
     }
 
     @Override
-    public ScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
+    public BuiltInScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionManager functionManager)
     {
         Type keyType = boundVariables.getTypeVariable("K1");
         Type transformedKeyType = boundVariables.getTypeVariable("K2");
@@ -126,14 +128,13 @@ public final class MapTransformKeyFunction
         MapType resultMapType = (MapType) typeManager.getParameterizedType(StandardTypes.MAP, ImmutableList.of(
                 TypeSignatureParameter.of(transformedKeyType.getTypeSignature()),
                 TypeSignatureParameter.of(valueType.getTypeSignature())));
-        return new ScalarFunctionImplementation(
+        return new BuiltInScalarFunctionImplementation(
                 false,
                 ImmutableList.of(
                         valueTypeArgumentProperty(RETURN_NULL_ON_NULL),
                         functionTypeArgumentProperty(BinaryFunctionInterface.class)),
                 generateTransformKey(keyType, transformedKeyType, valueType, resultMapType),
-                Optional.of(STATE_FACTORY.bindTo(resultMapType)),
-                isDeterministic());
+                Optional.of(STATE_FACTORY.bindTo(resultMapType)));
     }
 
     @UsedByGeneratedCode
@@ -193,7 +194,7 @@ public final class MapTransformKeyFunction
                 TypedSet.class,
                 constantType(binder, transformedKeyType),
                 divide(positionCount, constantInt(2)),
-                constantString(MAP_TRANSFORM_KEY_FUNCTION.getSignature().getName()))));
+                constantString(MAP_TRANSFORM_KEY_FUNCTION.getSignature().getNameSuffix()))));
 
         // throw null key exception block
         BytecodeNode throwNullKeyException = new BytecodeBlock()

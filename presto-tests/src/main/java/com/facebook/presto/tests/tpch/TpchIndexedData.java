@@ -17,6 +17,7 @@ import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.RecordCursor;
 import com.facebook.presto.spi.RecordSet;
 import com.facebook.presto.spi.SchemaTableName;
+import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.tpch.TpchMetadata;
 import com.facebook.presto.tpch.TpchRecordSetProvider;
@@ -72,7 +73,7 @@ public class TpchIndexedData
                         .collect(toImmutableSet());
 
                 TpchTable<?> tpchTable = TpchTable.getTable(table.getTableName());
-                RecordSet recordSet = tpchRecordSetProvider.getRecordSet(tpchTable, ImmutableList.copyOf(columnHandles.values()), table.getScaleFactor(), 0, 1, Optional.empty());
+                RecordSet recordSet = tpchRecordSetProvider.getRecordSet(tpchTable, ImmutableList.copyOf(columnHandles.values()), table.getScaleFactor(), 0, 1, TupleDomain.all());
                 IndexedTable indexedTable = indexTable(recordSet, ImmutableList.copyOf(columnHandles.keySet()), keyColumnNames);
                 indexedTablesBuilder.put(keyColumns, indexedTable);
             }
@@ -81,6 +82,9 @@ public class TpchIndexedData
         indexedTables = indexedTablesBuilder.build();
     }
 
+    /**
+     * @apiNote this method returns a cached index table that is ordered in a certain order.
+     */
     public Optional<IndexedTable> getIndexedTable(String tableName, double scaleFactor, Set<String> indexColumnNames)
     {
         TpchScaledTable table = new TpchScaledTable(tableName, scaleFactor);
@@ -184,6 +188,7 @@ public class TpchIndexedData
 
         public RecordSet lookupKeys(RecordSet recordSet)
         {
+            // Since we only return a cached copy of IndexedTable, please make sure you reorder the input to same order of keyColumns
             checkArgument(recordSet.getColumnTypes().equals(keyTypes), "Input RecordSet keys do not match expected key type");
 
             Iterable<RecordSet> outputRecordSets = Iterables.transform(tupleIterable(recordSet), key -> {
@@ -195,10 +200,11 @@ public class TpchIndexedData
                 return lookupKey(key);
             });
 
+            // We will return result same order as outputColumns
             return new ConcatRecordSet(outputRecordSets, outputTypes);
         }
 
-        public RecordSet lookupKey(MaterializedTuple tupleKey)
+        private RecordSet lookupKey(MaterializedTuple tupleKey)
         {
             return new MaterializedTupleRecordSet(keyToValues.get(tupleKey), outputTypes);
         }

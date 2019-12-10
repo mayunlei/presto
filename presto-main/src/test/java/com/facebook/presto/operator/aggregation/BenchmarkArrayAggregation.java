@@ -13,13 +13,11 @@
  */
 package com.facebook.presto.operator.aggregation;
 
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.MetadataManager;
-import com.facebook.presto.metadata.Signature;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.block.BlockBuilderStatus;
-import com.facebook.presto.spi.type.ArrayType;
 import com.facebook.presto.spi.type.Type;
 import com.google.common.collect.ImmutableList;
 import io.airlift.slice.Slices;
@@ -45,11 +43,11 @@ import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
-import static com.facebook.presto.metadata.FunctionKind.AGGREGATE;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
+import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static org.openjdk.jmh.annotations.Level.Invocation;
 
 @SuppressWarnings("MethodMayBeStatic")
@@ -66,7 +64,6 @@ public class BenchmarkArrayAggregation
     @Benchmark
     @OperationsPerInvocation(ARRAY_SIZE)
     public void arrayAggregation(BenchmarkData data)
-            throws Throwable
     {
         data.getAccumulator().addInput(data.getPage());
     }
@@ -86,7 +83,7 @@ public class BenchmarkArrayAggregation
         @Setup(Invocation)
         public void setup()
         {
-            MetadataManager metadata = MetadataManager.createTestMetadataManager();
+            FunctionManager functionManager = MetadataManager.createTestMetadataManager().getFunctionManager();
             Block block;
             Type elementType;
             switch (type) {
@@ -105,9 +102,9 @@ public class BenchmarkArrayAggregation
                 default:
                     throw new UnsupportedOperationException();
             }
-            ArrayType arrayType = new ArrayType(elementType);
-            Signature signature = new Signature(name, AGGREGATE, arrayType.getTypeSignature(), elementType.getTypeSignature());
-            InternalAggregationFunction function = metadata.getFunctionRegistry().getAggregateFunctionImplementation(signature);
+
+            InternalAggregationFunction function = functionManager.getAggregateFunctionImplementation(
+                    functionManager.lookupFunction(name, fromTypes(elementType)));
             accumulator = function.bind(ImmutableList.of(0), Optional.empty()).createAccumulator();
 
             block = createChannel(ARRAY_SIZE, elementType);
@@ -116,7 +113,7 @@ public class BenchmarkArrayAggregation
 
         private static Block createChannel(int arraySize, Type elementType)
         {
-            BlockBuilder blockBuilder = elementType.createBlockBuilder(new BlockBuilderStatus(), arraySize);
+            BlockBuilder blockBuilder = elementType.createBlockBuilder(null, arraySize);
             for (int i = 0; i < arraySize; i++) {
                 if (elementType.getJavaType() == long.class) {
                     elementType.writeLong(blockBuilder, (long) i);

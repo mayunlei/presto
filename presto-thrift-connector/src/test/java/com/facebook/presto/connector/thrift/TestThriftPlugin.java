@@ -23,22 +23,21 @@ import org.testng.annotations.Test;
 import java.util.Map;
 import java.util.ServiceLoader;
 
+import static com.facebook.airlift.testing.Assertions.assertInstanceOf;
 import static com.google.common.collect.Iterables.getOnlyElement;
-import static io.airlift.testing.Assertions.assertInstanceOf;
 import static org.testng.Assert.assertNotNull;
 
 public class TestThriftPlugin
 {
     @Test
     public void testPlugin()
-            throws Exception
     {
         ThriftPlugin plugin = loadPlugin(ThriftPlugin.class);
 
         ConnectorFactory factory = getOnlyElement(plugin.getConnectorFactories());
         assertInstanceOf(factory, ThriftConnectorFactory.class);
 
-        Map<String, String> config = ImmutableMap.of("static-location.hosts", "localhost:7777");
+        Map<String, String> config = ImmutableMap.of("presto.thrift.client.addresses", "localhost:7779");
 
         Connector connector = factory.create("test", config, new TestingConnectorContext());
         assertNotNull(connector);

@@ -14,28 +14,29 @@
 package com.facebook.presto.spiller;
 
 import com.facebook.presto.block.BlockEncodingManager;
-import com.facebook.presto.execution.buffer.PagesSerde;
-import com.facebook.presto.execution.buffer.PagesSerdeFactory;
-import com.facebook.presto.memory.AggregatedMemoryContext;
-import com.facebook.presto.memory.LocalMemoryContext;
+import com.facebook.presto.execution.buffer.PageCodecMarker;
+import com.facebook.presto.execution.buffer.PagesSerdeUtil;
+import com.facebook.presto.execution.buffer.SerializedPage;
+import com.facebook.presto.memory.context.LocalMemoryContext;
 import com.facebook.presto.operator.PageAssertions;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.block.BlockBuilderStatus;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.type.TypeRegistry;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterators;
 import com.google.common.io.Files;
 import com.google.common.util.concurrent.ListeningExecutorService;
-import org.testng.annotations.AfterMethod;
+import io.airlift.slice.InputStreamSliceInput;
+import org.testng.annotations.AfterClass;
 import org.testng.annotations.Test;
 
 import java.io.File;
+import java.io.InputStream;
 import java.util.Iterator;
 import java.util.List;
 
+import static com.facebook.presto.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
 import static com.facebook.presto.spi.type.VarbinaryType.VARBINARY;
@@ -44,8 +45,10 @@ import static com.google.common.io.MoreFiles.listFiles;
 import static com.google.common.io.RecursiveDeleteOption.ALLOW_INSECURE;
 import static com.google.common.util.concurrent.MoreExecutors.listeningDecorator;
 import static java.lang.Double.doubleToLongBits;
+import static java.nio.file.Files.newInputStream;
 import static java.util.concurrent.Executors.newCachedThreadPool;
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertTrue;
 
 public class TestFileSingleStreamSpiller
 {
@@ -54,7 +57,7 @@ public class TestFileSingleStreamSpiller
     private final ListeningExecutorService executor = listeningDecorator(newCachedThreadPool());
     private final File spillPath = Files.createTempDir();
 
-    @AfterMethod
+    @AfterClass(alwaysRun = true)
     public void tearDown()
             throws Exception
     {
@@ -66,26 +69,74 @@ public class TestFileSingleStreamSpiller
     public void testSpill()
             throws Exception
     {
-        PagesSerdeFactory serdeFactory = new PagesSerdeFactory(new BlockEncodingManager(new TypeRegistry(ImmutableSet.copyOf(TYPES))), false);
-        PagesSerde serde = serdeFactory.createPagesSerde();
-        SpillerStats spillerStats = new SpillerStats();
-        LocalMemoryContext memoryContext = new AggregatedMemoryContext().newLocalMemoryContext();
-        FileSingleStreamSpiller spiller = new FileSingleStreamSpiller(serde, executor, spillPath.toPath(), spillerStats, bytes -> {}, memoryContext);
+        assertSpill(false, false);
+    }
+
+    @Test
+    public void testSpillCompression()
+            throws Exception
+    {
+        assertSpill(true, false);
+    }
+
+    @Test
+    public void testSpillEncryption()
+            throws Exception
+    {
+        // Both with compression enabled and disabled
+        assertSpill(false, true);
+    }
+
+    @Test
+    public void testSpillEncryptionWithCompression()
+            throws Exception
+    {
+        assertSpill(true, true);
+    }
+
+    private void assertSpill(boolean compression, boolean encryption)
+            throws Exception
+    {
+        FileSingleStreamSpillerFactory spillerFactory = new FileSingleStreamSpillerFactory(
+                executor, // executor won't be closed, because we don't call destroy() on the spiller factory
+                new BlockEncodingManager(new TypeRegistry()),
+                new SpillerStats(),
+                ImmutableList.of(spillPath.toPath()),
+                1.0,
+                compression,
+                encryption);
+        LocalMemoryContext memoryContext = newSimpleAggregatedMemoryContext().newLocalMemoryContext("test");
+        SingleStreamSpiller singleStreamSpiller = spillerFactory.create(TYPES, bytes -> {}, memoryContext);
+        assertTrue(singleStreamSpiller instanceof FileSingleStreamSpiller);
+        FileSingleStreamSpiller spiller = (FileSingleStreamSpiller) singleStreamSpiller;
 
         Page page = buildPage();
 
-        assertEquals(memoryContext.getBytes(), 0);
+        // The spillers will reserve memory in their constructors
+        assertEquals(memoryContext.getBytes(), 4096);
         spiller.spill(page).get();
         spiller.spill(Iterators.forArray(page, page, page)).get();
         assertEquals(listFiles(spillPath.toPath()).size(), 1);
 
-        // for spilling memory should be accounted only during spill() method is executing
-        assertEquals(memoryContext.getBytes(), 0);
+        // Assert the spill codec flags match the expected configuration
+        try (InputStream is = newInputStream(listFiles(spillPath.toPath()).get(0))) {
+            Iterator<SerializedPage> serializedPages = PagesSerdeUtil.readSerializedPages(new InputStreamSliceInput(is));
+            assertTrue(serializedPages.hasNext(), "at least one page should be successfully read back");
+            byte markers = serializedPages.next().getPageCodecMarkers();
+            assertEquals(PageCodecMarker.COMPRESSED.isSet(markers), compression);
+            assertEquals(PageCodecMarker.ENCRYPTED.isSet(markers), encryption);
+        }
+
+        // The spillers release their memory reservations when they are closed, therefore at this point
+        // they will have non-zero memory reservation.
+        // assertEquals(memoryContext.getBytes(), 0);
 
         Iterator<Page> spilledPagesIterator = spiller.getSpilledPages();
         assertEquals(memoryContext.getBytes(), FileSingleStreamSpiller.BUFFER_SIZE);
         ImmutableList<Page> spilledPages = ImmutableList.copyOf(spilledPagesIterator);
-        assertEquals(memoryContext.getBytes(), 0);
+        // The spillers release their memory reservations when they are closed, therefore at this point
+        // they will have non-zero memory reservation.
+        // assertEquals(memoryContext.getBytes(), 0);
 
         assertEquals(4, spilledPages.size());
         for (int i = 0; i < 4; ++i) {
@@ -99,9 +150,9 @@ public class TestFileSingleStreamSpiller
 
     private Page buildPage()
     {
-        BlockBuilder col1 = BIGINT.createBlockBuilder(new BlockBuilderStatus(), 1);
-        BlockBuilder col2 = DOUBLE.createBlockBuilder(new BlockBuilderStatus(), 1);
-        BlockBuilder col3 = VARBINARY.createBlockBuilder(new BlockBuilderStatus(), 1);
+        BlockBuilder col1 = BIGINT.createBlockBuilder(null, 1);
+        BlockBuilder col2 = DOUBLE.createBlockBuilder(null, 1);
+        BlockBuilder col3 = VARBINARY.createBlockBuilder(null, 1);
 
         col1.writeLong(42).closeEntry();
         col2.writeLong(doubleToLongBits(43.0)).closeEntry();

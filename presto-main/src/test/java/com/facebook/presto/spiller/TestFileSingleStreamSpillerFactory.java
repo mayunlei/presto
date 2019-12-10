@@ -14,15 +14,12 @@
 package com.facebook.presto.spiller;
 
 import com.facebook.presto.block.BlockEncodingManager;
-import com.facebook.presto.memory.AggregatedMemoryContext;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.block.BlockBuilderStatus;
 import com.facebook.presto.spi.block.BlockEncodingSerde;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.type.TypeRegistry;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.io.Closer;
 import com.google.common.io.Files;
 import com.google.common.util.concurrent.ListeningExecutorService;
@@ -37,6 +34,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Executors;
 
+import static com.facebook.presto.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spiller.FileSingleStreamSpillerFactory.SPILL_FILE_PREFIX;
 import static com.facebook.presto.spiller.FileSingleStreamSpillerFactory.SPILL_FILE_SUFFIX;
@@ -44,6 +42,7 @@ import static com.google.common.io.MoreFiles.deleteRecursively;
 import static com.google.common.io.MoreFiles.listFiles;
 import static com.google.common.io.RecursiveDeleteOption.ALLOW_INSECURE;
 import static com.google.common.util.concurrent.Futures.getUnchecked;
+import static java.util.Collections.emptyList;
 import static org.testng.Assert.assertEquals;
 
 @Test(singleThreaded = true)
@@ -56,7 +55,6 @@ public class TestFileSingleStreamSpillerFactory
 
     @BeforeMethod
     public void setUp()
-            throws Exception
     {
         executor = MoreExecutors.listeningDecorator(Executors.newCachedThreadPool());
         closer.register(() -> executor.shutdownNow());
@@ -78,14 +76,16 @@ public class TestFileSingleStreamSpillerFactory
             throws Exception
     {
         List<Type> types = ImmutableList.of(BIGINT);
-        BlockEncodingSerde blockEncodingSerde = new BlockEncodingManager(new TypeRegistry(ImmutableSet.copyOf(types)));
+        BlockEncodingSerde blockEncodingSerde = new BlockEncodingManager(new TypeRegistry());
         List<Path> spillPaths = ImmutableList.of(spillPath1.toPath(), spillPath2.toPath());
         FileSingleStreamSpillerFactory spillerFactory = new FileSingleStreamSpillerFactory(
                 executor, // executor won't be closed, because we don't call destroy() on the spiller factory
                 blockEncodingSerde,
                 new SpillerStats(),
                 spillPaths,
-                1.0);
+                1.0,
+                false,
+                false);
 
         assertEquals(listFiles(spillPath1.toPath()).size(), 0);
         assertEquals(listFiles(spillPath2.toPath()).size(), 0);
@@ -93,7 +93,7 @@ public class TestFileSingleStreamSpillerFactory
         Page page = buildPage();
         List<SingleStreamSpiller> spillers = new ArrayList<>();
         for (int i = 0; i < 10; ++i) {
-            SingleStreamSpiller singleStreamSpiller = spillerFactory.create(types, bytes -> {}, new AggregatedMemoryContext().newLocalMemoryContext());
+            SingleStreamSpiller singleStreamSpiller = spillerFactory.create(types, bytes -> {}, newSimpleAggregatedMemoryContext().newLocalMemoryContext("test"));
             getUnchecked(singleStreamSpiller.spill(page));
             spillers.add(singleStreamSpiller);
         }
@@ -107,7 +107,7 @@ public class TestFileSingleStreamSpillerFactory
 
     private Page buildPage()
     {
-        BlockBuilder col1 = BIGINT.createBlockBuilder(new BlockBuilderStatus(), 1);
+        BlockBuilder col1 = BIGINT.createBlockBuilder(null, 1);
         col1.writeLong(42).closeEntry();
         return new Page(col1.build());
     }
@@ -116,24 +116,41 @@ public class TestFileSingleStreamSpillerFactory
     public void throwsIfNoDiskSpace()
     {
         List<Type> types = ImmutableList.of(BIGINT);
-        BlockEncodingSerde blockEncodingSerde = new BlockEncodingManager(new TypeRegistry(ImmutableSet.copyOf(types)));
+        BlockEncodingSerde blockEncodingSerde = new BlockEncodingManager(new TypeRegistry());
         List<Path> spillPaths = ImmutableList.of(spillPath1.toPath(), spillPath2.toPath());
         FileSingleStreamSpillerFactory spillerFactory = new FileSingleStreamSpillerFactory(
                 executor, // executor won't be closed, because we don't call destroy() on the spiller factory
                 blockEncodingSerde,
                 new SpillerStats(),
                 spillPaths,
-                0.0);
+                0.0,
+                false,
+                false);
 
-        spillerFactory.create(types, bytes -> {}, new AggregatedMemoryContext().newLocalMemoryContext());
+        spillerFactory.create(types, bytes -> {}, newSimpleAggregatedMemoryContext().newLocalMemoryContext("test"));
+    }
+
+    @Test(expectedExceptions = RuntimeException.class, expectedExceptionsMessageRegExp = "No spill paths configured")
+    public void throwIfNoSpillPaths()
+    {
+        List<Path> spillPaths = emptyList();
+        List<Type> types = ImmutableList.of(BIGINT);
+        FileSingleStreamSpillerFactory spillerFactory = new FileSingleStreamSpillerFactory(
+                executor, // executor won't be closed, because we don't call destroy() on the spiller factory
+                new BlockEncodingManager(new TypeRegistry()),
+                new SpillerStats(),
+                spillPaths,
+                1.0,
+                false,
+                false);
+        spillerFactory.create(types, bytes -> {}, newSimpleAggregatedMemoryContext().newLocalMemoryContext("test"));
     }
 
     @Test
     public void testCleanupOldSpillFiles()
             throws Exception
     {
-        List<Type> types = ImmutableList.of(BIGINT);
-        BlockEncodingSerde blockEncodingSerde = new BlockEncodingManager(new TypeRegistry(ImmutableSet.copyOf(types)));
+        BlockEncodingSerde blockEncodingSerde = new BlockEncodingManager(new TypeRegistry());
         List<Path> spillPaths = ImmutableList.of(spillPath1.toPath(), spillPath2.toPath());
         spillPath1.mkdirs();
         spillPath2.mkdirs();
@@ -153,7 +170,9 @@ public class TestFileSingleStreamSpillerFactory
                 blockEncodingSerde,
                 new SpillerStats(),
                 spillPaths,
-                1.0);
+                1.0,
+                false,
+                false);
         spillerFactory.cleanupOldSpillFiles();
 
         assertEquals(listFiles(spillPath1.toPath()).size(), 1);

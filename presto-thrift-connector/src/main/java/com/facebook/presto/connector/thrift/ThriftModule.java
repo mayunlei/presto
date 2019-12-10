@@ -13,14 +13,11 @@
  */
 package com.facebook.presto.connector.thrift;
 
+import com.facebook.drift.client.ExceptionClassification;
+import com.facebook.drift.client.ExceptionClassification.HostStatus;
 import com.facebook.presto.connector.thrift.annotations.ForMetadataRefresh;
-import com.facebook.presto.connector.thrift.annotations.ForRetryDriver;
-import com.facebook.presto.connector.thrift.annotations.NonRetrying;
 import com.facebook.presto.connector.thrift.api.PrestoThriftService;
-import com.facebook.presto.connector.thrift.clientproviders.DefaultPrestoThriftServiceProvider;
-import com.facebook.presto.connector.thrift.clientproviders.PrestoThriftServiceProvider;
-import com.facebook.presto.connector.thrift.clientproviders.RetryingPrestoThriftServiceProvider;
-import com.google.common.util.concurrent.ListeningScheduledExecutorService;
+import com.facebook.presto.connector.thrift.api.PrestoThriftServiceException;
 import com.google.inject.Binder;
 import com.google.inject.Module;
 import com.google.inject.Provides;
@@ -28,32 +25,51 @@ import com.google.inject.Scopes;
 
 import javax.inject.Singleton;
 
+import java.util.Optional;
 import java.util.concurrent.Executor;
 
-import static com.facebook.swift.service.guice.ThriftClientBinder.thriftClientBinder;
-import static com.google.common.util.concurrent.MoreExecutors.listeningDecorator;
-import static io.airlift.concurrent.Threads.daemonThreadsNamed;
-import static io.airlift.concurrent.Threads.threadsNamed;
-import static io.airlift.configuration.ConfigBinder.configBinder;
+import static com.facebook.airlift.concurrent.Threads.daemonThreadsNamed;
+import static com.facebook.airlift.configuration.ConfigBinder.configBinder;
+import static com.facebook.drift.client.ExceptionClassification.NORMAL_EXCEPTION;
+import static com.facebook.drift.client.guice.DriftClientBinder.driftClientBinder;
+import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.Executors.newFixedThreadPool;
-import static java.util.concurrent.Executors.newScheduledThreadPool;
+import static org.weakref.jmx.ObjectNames.generatedNameOf;
+import static org.weakref.jmx.guice.ExportBinder.newExporter;
 
 public class ThriftModule
         implements Module
 {
+    private final String connectorId;
+
+    public ThriftModule(String connectorId)
+    {
+        this.connectorId = requireNonNull(connectorId, "connectorId is null");
+    }
+
     @Override
     public void configure(Binder binder)
     {
+        driftClientBinder(binder)
+                .bindDriftClient(PrestoThriftService.class)
+                .withExceptionClassifier(t -> {
+                    if (t instanceof PrestoThriftServiceException) {
+                        boolean retryable = ((PrestoThriftServiceException) t).isRetryable();
+                        return new ExceptionClassification(Optional.of(retryable), HostStatus.NORMAL);
+                    }
+                    return NORMAL_EXCEPTION;
+                });
+
         binder.bind(ThriftConnector.class).in(Scopes.SINGLETON);
-        thriftClientBinder(binder).bindThriftClient(PrestoThriftService.class);
         binder.bind(ThriftMetadata.class).in(Scopes.SINGLETON);
         binder.bind(ThriftSplitManager.class).in(Scopes.SINGLETON);
         binder.bind(ThriftPageSourceProvider.class).in(Scopes.SINGLETON);
-        binder.bind(PrestoThriftServiceProvider.class).to(RetryingPrestoThriftServiceProvider.class).in(Scopes.SINGLETON);
-        binder.bind(PrestoThriftServiceProvider.class).annotatedWith(NonRetrying.class).to(DefaultPrestoThriftServiceProvider.class).in(Scopes.SINGLETON);
         configBinder(binder).bindConfig(ThriftConnectorConfig.class);
         binder.bind(ThriftSessionProperties.class).in(Scopes.SINGLETON);
         binder.bind(ThriftIndexProvider.class).in(Scopes.SINGLETON);
+        binder.bind(ThriftConnectorStats.class).in(Scopes.SINGLETON);
+        newExporter(binder).export(ThriftConnectorStats.class)
+                .as(generatedNameOf(ThriftConnectorStats.class, connectorId));
     }
 
     @Provides
@@ -62,13 +78,5 @@ public class ThriftModule
     public Executor createMetadataRefreshExecutor(ThriftConnectorConfig config)
     {
         return newFixedThreadPool(config.getMetadataRefreshThreads(), daemonThreadsNamed("metadata-refresh-%s"));
-    }
-
-    @Provides
-    @Singleton
-    @ForRetryDriver
-    public ListeningScheduledExecutorService createRetryDriverScheduledExecutor(ThriftConnectorConfig config)
-    {
-        return listeningDecorator(newScheduledThreadPool(config.getRetryDriverThreads(), threadsNamed("thrift-retry-driver-%s")));
     }
 }

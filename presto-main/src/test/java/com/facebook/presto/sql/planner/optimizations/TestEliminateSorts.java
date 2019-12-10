@@ -15,16 +15,14 @@ package com.facebook.presto.sql.planner.optimizations;
 
 import com.facebook.presto.spi.block.SortOrder;
 import com.facebook.presto.sql.parser.SqlParser;
-import com.facebook.presto.sql.planner.Plan;
-import com.facebook.presto.sql.planner.StatsRecorder;
+import com.facebook.presto.sql.planner.RuleStatsRecorder;
 import com.facebook.presto.sql.planner.assertions.BasePlanTest;
 import com.facebook.presto.sql.planner.assertions.ExpectedValueProvider;
-import com.facebook.presto.sql.planner.assertions.PlanAssert;
 import com.facebook.presto.sql.planner.assertions.PlanMatchPattern;
 import com.facebook.presto.sql.planner.iterative.IterativeOptimizer;
 import com.facebook.presto.sql.planner.iterative.rule.RemoveRedundantIdentityProjections;
+import com.facebook.presto.sql.planner.iterative.rule.TranslateExpressions;
 import com.facebook.presto.sql.planner.plan.WindowNode;
-import com.facebook.presto.testing.LocalQueryRunner;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -79,27 +77,48 @@ public class TestEliminateSorts
         PlanMatchPattern pattern =
                 anyTree(
                         sort(
-                                window(windowMatcherBuilder -> windowMatcherBuilder
-                                                .specification(windowSpec)
-                                                .addFunction(functionCall("row_number", Optional.empty(), ImmutableList.of())),
-                                        anyTree(LINEITEM_TABLESCAN_Q))));
+                                anyTree(
+                                        window(windowMatcherBuilder -> windowMatcherBuilder
+                                                        .specification(windowSpec)
+                                                        .addFunction(functionCall("row_number", Optional.empty(), ImmutableList.of())),
+                                                anyTree(LINEITEM_TABLESCAN_Q)))));
 
         assertUnitPlan(sql, pattern);
     }
 
     public void assertUnitPlan(@Language("SQL") String sql, PlanMatchPattern pattern)
     {
-        LocalQueryRunner queryRunner = getQueryRunner();
-        List<PlanOptimizer> optimizers = ImmutableList.of(
-                new UnaliasSymbolReferences(),
-                new AddExchanges(queryRunner.getMetadata(), new SqlParser()),
+        List<PlanOptimizer> optimizersBeforeTranslation = ImmutableList.of(
+                new UnaliasSymbolReferences(getMetadata().getFunctionManager()),
+                new AddExchanges(getQueryRunner().getMetadata(), new SqlParser()),
                 new PruneUnreferencedOutputs(),
-                new IterativeOptimizer(new StatsRecorder(), ImmutableSet.of(new RemoveRedundantIdentityProjections())));
+                new IterativeOptimizer(
+                        new RuleStatsRecorder(),
+                        getQueryRunner().getStatsCalculator(),
+                        getQueryRunner().getCostCalculator(),
+                        new TranslateExpressions(getQueryRunner().getMetadata(), new SqlParser()).rules()),
+                new IterativeOptimizer(
+                        new RuleStatsRecorder(),
+                        getQueryRunner().getStatsCalculator(),
+                        getQueryRunner().getCostCalculator(),
+                        ImmutableSet.of(new RemoveRedundantIdentityProjections())));
 
-        queryRunner.inTransaction(transactionSession -> {
-            Plan actualPlan = queryRunner.createPlan(transactionSession, sql, optimizers);
-            PlanAssert.assertPlan(transactionSession, queryRunner.getMetadata(), queryRunner.getCostCalculator(), actualPlan, pattern);
-            return null;
-        });
+        List<PlanOptimizer> optimizersAfterTranslation = ImmutableList.of(
+                new AddExchanges(getQueryRunner().getMetadata(), new SqlParser()),
+                new IterativeOptimizer(
+                        new RuleStatsRecorder(),
+                        getQueryRunner().getStatsCalculator(),
+                        getQueryRunner().getCostCalculator(),
+                        new TranslateExpressions(getMetadata(), new SqlParser()).rules()),
+                new UnaliasSymbolReferences(getMetadata().getFunctionManager()),
+                new PruneUnreferencedOutputs(),
+                new IterativeOptimizer(
+                        new RuleStatsRecorder(),
+                        getQueryRunner().getStatsCalculator(),
+                        getQueryRunner().getCostCalculator(),
+                        ImmutableSet.of(new RemoveRedundantIdentityProjections())));
+
+        assertPlan(sql, pattern, optimizersBeforeTranslation);
+        assertPlan(sql, pattern, optimizersAfterTranslation);
     }
 }

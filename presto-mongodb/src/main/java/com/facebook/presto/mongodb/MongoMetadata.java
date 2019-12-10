@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.mongodb;
 
+import com.facebook.airlift.log.Logger;
 import com.facebook.presto.mongodb.MongoIndex.MongodbIndexKey;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
@@ -35,9 +36,9 @@ import com.facebook.presto.spi.TableNotFoundException;
 import com.facebook.presto.spi.connector.ConnectorMetadata;
 import com.facebook.presto.spi.connector.ConnectorOutputMetadata;
 import com.facebook.presto.spi.predicate.TupleDomain;
+import com.facebook.presto.spi.statistics.ComputedStatistics;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import io.airlift.log.Logger;
 import io.airlift.slice.Slice;
 
 import java.util.Collection;
@@ -135,6 +136,14 @@ public class MongoMetadata
         return columns.build();
     }
 
+    private List<SchemaTableName> listTables(ConnectorSession session, SchemaTablePrefix prefix)
+    {
+        if (prefix.getTableName() == null) {
+            return listTables(session, prefix.getSchemaName());
+        }
+        return ImmutableList.of(new SchemaTableName(prefix.getSchemaName(), prefix.getTableName()));
+    }
+
     @Override
     public ColumnMetadata getColumnMetadata(ConnectorSession session, ConnectorTableHandle tableHandle, ColumnHandle columnHandle)
     {
@@ -221,7 +230,7 @@ public class MongoMetadata
     }
 
     @Override
-    public Optional<ConnectorOutputMetadata> finishCreateTable(ConnectorSession session, ConnectorOutputTableHandle tableHandle, Collection<Slice> fragments)
+    public Optional<ConnectorOutputMetadata> finishCreateTable(ConnectorSession session, ConnectorOutputTableHandle tableHandle, Collection<Slice> fragments, Collection<ComputedStatistics> computedStatistics)
     {
         clearRollback();
         return Optional.empty();
@@ -236,6 +245,12 @@ public class MongoMetadata
         return new MongoInsertTableHandle(
                 table.getSchemaTableName(),
                 columns.stream().filter(c -> !c.isHidden()).collect(toList()));
+    }
+
+    @Override
+    public Optional<ConnectorOutputMetadata> finishInsert(ConnectorSession session, ConnectorInsertTableHandle insertHandle, Collection<Slice> fragments, Collection<ComputedStatistics> computedStatistics)
+    {
+        return Optional.empty();
     }
 
     private void setRollback(Runnable action)
@@ -277,14 +292,6 @@ public class MongoMetadata
             return listSchemaNames(session);
         }
         return ImmutableList.of(schemaNameOrNull);
-    }
-
-    private List<SchemaTableName> listTables(ConnectorSession session, SchemaTablePrefix prefix)
-    {
-        if (prefix.getSchemaName() == null) {
-            return listTables(session, prefix.getSchemaName());
-        }
-        return ImmutableList.of(new SchemaTableName(prefix.getSchemaName(), prefix.getTableName()));
     }
 
     private static List<MongoColumnHandle> buildColumnHandles(ConnectorTableMetadata tableMetadata)

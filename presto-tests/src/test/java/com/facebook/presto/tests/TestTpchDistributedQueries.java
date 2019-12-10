@@ -13,7 +13,7 @@
  */
 package com.facebook.presto.tests;
 
-import com.facebook.presto.tests.tpch.TpchQueryRunner;
+import com.facebook.presto.tests.tpch.TpchQueryRunnerBuilder;
 import com.google.common.base.Strings;
 import org.intellij.lang.annotations.Language;
 import org.testng.annotations.Test;
@@ -24,9 +24,8 @@ public class TestTpchDistributedQueries
         extends AbstractTestQueries
 {
     public TestTpchDistributedQueries()
-            throws Exception
     {
-        super(TpchQueryRunner::createQueryRunner);
+        super(() -> TpchQueryRunnerBuilder.builder().build());
     }
 
     @Test
@@ -35,6 +34,32 @@ public class TestTpchDistributedQueries
         //  Generate a super-long query: SELECT x,x,x,x,x,... FROM (VALUES 1,2,3,4,5) t(x)
         @Language("SQL") String longQuery = "SELECT x" + Strings.repeat(",x", 500_000) + " FROM (VALUES 1,2,3,4,5) t(x)";
         assertQueryFails(longQuery, "Query text length \\(1000037\\) exceeds the maximum length \\(1000000\\)");
+    }
+
+    @Test
+    public void testAnalyzePropertiesSystemTable()
+    {
+        assertQuery("SELECT COUNT(*) FROM system.metadata.analyze_properties WHERE catalog_name = 'tpch'", "SELECT 0");
+    }
+
+    @Test
+    public void testAnalyze()
+    {
+        assertUpdate("ANALYZE orders", 15000);
+        assertQueryFails("ANALYZE orders WITH (foo = 'bar')", ".* does not support analyze property 'foo'.*");
+    }
+
+    @Test
+    public void testTooManyStages()
+    {
+        @Language("SQL") String query = "WITH\n" +
+                "  t1 AS (SELECT nationkey AS x FROM nation where name='UNITED STATES'),\n" +
+                "  t2 AS (SELECT a.x+b.x+c.x+d.x AS x FROM t1 a, t1 b, t1 c, t1 d),\n" +
+                "  t3 AS (SELECT a.x+b.x+c.x+d.x AS x FROM t2 a, t2 b, t2 c, t2 d),\n" +
+                "  t4 AS (SELECT a.x+b.x+c.x+d.x AS x FROM t3 a, t3 b, t3 c, t3 d),\n" +
+                "  t5 AS (SELECT a.x+b.x+c.x+d.x AS x FROM t4 a, t4 b, t4 c, t4 d)\n" +
+                "SELECT x FROM t5\n";
+        assertQueryFails(query, "Number of stages in the query \\([0-9]+\\) exceeds the allowed maximum \\([0-9]+\\).*");
     }
 
     @Test

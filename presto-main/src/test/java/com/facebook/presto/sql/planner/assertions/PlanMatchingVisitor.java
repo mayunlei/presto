@@ -14,48 +14,48 @@
 package com.facebook.presto.sql.planner.assertions;
 
 import com.facebook.presto.Session;
-import com.facebook.presto.cost.PlanNodeCost;
+import com.facebook.presto.cost.StatsProvider;
 import com.facebook.presto.metadata.Metadata;
-import com.facebook.presto.sql.planner.Symbol;
+import com.facebook.presto.spi.plan.Assignments;
+import com.facebook.presto.spi.plan.PlanNode;
+import com.facebook.presto.spi.plan.ProjectNode;
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.iterative.GroupReference;
 import com.facebook.presto.sql.planner.iterative.Lookup;
-import com.facebook.presto.sql.planner.plan.Assignments;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
-import com.facebook.presto.sql.planner.plan.PlanNode;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
-import com.facebook.presto.sql.planner.plan.PlanVisitor;
-import com.facebook.presto.sql.planner.plan.ProjectNode;
+import com.facebook.presto.sql.planner.plan.InternalPlanVisitor;
 
 import java.util.List;
-import java.util.Map;
 
 import static com.facebook.presto.sql.planner.assertions.MatchResult.NO_MATCH;
 import static com.facebook.presto.sql.planner.assertions.MatchResult.match;
+import static com.facebook.presto.sql.relational.OriginalExpressionUtils.asSymbolReference;
+import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToRowExpression;
 import static com.google.common.base.Preconditions.checkState;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 
 final class PlanMatchingVisitor
-        extends PlanVisitor<MatchResult, PlanMatchPattern>
+        extends InternalPlanVisitor<MatchResult, PlanMatchPattern>
 {
     private final Metadata metadata;
     private final Session session;
-    private final Map<PlanNodeId, PlanNodeCost> planCost;
+    private final StatsProvider statsProvider;
     private final Lookup lookup;
 
-    PlanMatchingVisitor(Session session, Metadata metadata, Map<PlanNodeId, PlanNodeCost> planCost, Lookup lookup)
+    PlanMatchingVisitor(Session session, Metadata metadata, StatsProvider statsProvider, Lookup lookup)
     {
         this.session = requireNonNull(session, "session is null");
         this.metadata = requireNonNull(metadata, "metadata is null");
-        this.planCost = requireNonNull(planCost, "planCost is null");
+        this.statsProvider = requireNonNull(statsProvider, "statsProvider is null");
         this.lookup = requireNonNull(lookup, "lookup is null");
     }
 
     @Override
     public MatchResult visitExchange(ExchangeNode node, PlanMatchPattern pattern)
     {
-        List<List<Symbol>> allInputs = node.getInputs();
-        List<Symbol> outputs = node.getOutputSymbols();
+        List<List<VariableReferenceExpression>> allInputs = node.getInputs();
+        List<VariableReferenceExpression> outputs = node.getOutputVariables();
 
         MatchResult result = super.visitExchange(node, pattern);
 
@@ -64,10 +64,10 @@ final class PlanMatchingVisitor
         }
 
         SymbolAliases newAliases = result.getAliases();
-        for (List<Symbol> inputs : allInputs) {
+        for (List<VariableReferenceExpression> inputs : allInputs) {
             Assignments.Builder assignments = Assignments.builder();
             for (int i = 0; i < inputs.size(); ++i) {
-                assignments.put(outputs.get(i), inputs.get(i).toSymbolReference());
+                assignments.put(outputs.get(i), castToRowExpression(asSymbolReference(inputs.get(i))));
             }
             newAliases = newAliases.updateAssignments(assignments.build());
         }
@@ -94,11 +94,11 @@ final class PlanMatchingVisitor
         if (match.isMatch()) {
             return match;
         }
-        return visitPlan(node, pattern);
+        return matchLeaf(node, pattern, pattern.shapeMatches(node));
     }
 
     @Override
-    protected MatchResult visitPlan(PlanNode node, PlanMatchPattern pattern)
+    public MatchResult visitPlan(PlanNode node, PlanMatchPattern pattern)
     {
         List<PlanMatchingState> states = pattern.shapeMatches(node);
 
@@ -123,7 +123,7 @@ final class PlanMatchingVisitor
 
             // Try upMatching this node with the the aliases gathered from the source nodes.
             SymbolAliases allSourceAliases = sourcesMatch.getAliases();
-            MatchResult matchResult = pattern.detailMatches(node, planCost.get(node.getId()), session, metadata, allSourceAliases);
+            MatchResult matchResult = pattern.detailMatches(node, statsProvider, session, metadata, allSourceAliases);
             if (matchResult.isMatch()) {
                 checkState(result == NO_MATCH, format("Ambiguous match on node %s", node));
                 result = match(allSourceAliases.withNewAliases(matchResult.getAliases()));
@@ -142,13 +142,13 @@ final class PlanMatchingVisitor
                 continue;
             }
 
-                /*
-                 * We have to call detailMatches for two reasons:
-                 * 1) Make sure there aren't any mismatches checking the internals of a leaf node.
-                 * 2) Collect the aliases from the source nodes so we can add them to
-                 *    SymbolAliases. They'll be needed further up.
-                 */
-            MatchResult matchResult = pattern.detailMatches(node, planCost.get(node.getId()), session, metadata, new SymbolAliases());
+            /*
+             * We have to call detailMatches for two reasons:
+             * 1) Make sure there aren't any mismatches checking the internals of a leaf node.
+             * 2) Collect the aliases from the source nodes so we can add them to
+             *    SymbolAliases. They'll be needed further up.
+             */
+            MatchResult matchResult = pattern.detailMatches(node, statsProvider, session, metadata, new SymbolAliases());
             if (matchResult.isMatch()) {
                 checkState(result == NO_MATCH, format("Ambiguous match on leaf node %s", node));
                 result = matchResult;

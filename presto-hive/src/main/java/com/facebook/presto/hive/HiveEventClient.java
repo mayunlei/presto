@@ -13,10 +13,8 @@
  */
 package com.facebook.presto.hive;
 
-import io.airlift.event.client.AbstractEventClient;
-import io.airlift.log.Logger;
-
-import java.io.IOException;
+import com.facebook.airlift.event.client.AbstractEventClient;
+import com.facebook.airlift.log.Logger;
 
 public class HiveEventClient
         extends AbstractEventClient
@@ -25,13 +23,12 @@ public class HiveEventClient
 
     @Override
     public <T> void postEvent(T event)
-            throws IOException
     {
         if (!(event instanceof WriteCompletedEvent)) {
             return;
         }
         WriteCompletedEvent writeCompletedEvent = (WriteCompletedEvent) event;
-        log.info("File created: query: %s, schema: %s, table: %s, partition: '%s', format: %s, size: %s, path: %s",
+        log.debug("File created: query: %s, schema: %s, table: %s, partition: '%s', format: %s, size: %s, path: %s",
                 writeCompletedEvent.getQueryId(),
                 writeCompletedEvent.getSchemaName(),
                 writeCompletedEvent.getTableName(),

@@ -19,27 +19,25 @@ import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.block.BlockBuilderStatus;
 import com.facebook.presto.spi.block.DictionaryBlock;
 import com.facebook.presto.spi.block.LazyBlock;
 import com.facebook.presto.spi.block.LongArrayBlock;
 import com.facebook.presto.spi.block.RunLengthEncodedBlock;
 import com.facebook.presto.spi.type.Type;
 import com.google.common.collect.ImmutableList;
-import it.unimi.dsi.fastutil.ints.IntArrayList;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 import java.util.Arrays;
 import java.util.concurrent.ScheduledExecutorService;
 
+import static com.facebook.airlift.concurrent.Threads.daemonThreadsNamed;
+import static com.facebook.airlift.testing.Assertions.assertGreaterThan;
+import static com.facebook.airlift.testing.Assertions.assertInstanceOf;
 import static com.facebook.presto.block.BlockAssertions.assertBlockEquals;
 import static com.facebook.presto.block.BlockAssertions.createLongSequenceBlock;
 import static com.facebook.presto.spi.block.DictionaryId.randomDictionaryId;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
-import static io.airlift.concurrent.Threads.daemonThreadsNamed;
-import static io.airlift.testing.Assertions.assertGreaterThan;
-import static io.airlift.testing.Assertions.assertInstanceOf;
 import static java.util.concurrent.Executors.newSingleThreadScheduledExecutor;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotNull;
@@ -60,7 +58,6 @@ public class TestDictionaryAwarePageProjection
 
     @Test
     public void testDelegateMethods()
-            throws Exception
     {
         DictionaryAwarePageProjection projection = createProjection();
         assertEquals(projection.isDeterministic(), true);
@@ -70,7 +67,6 @@ public class TestDictionaryAwarePageProjection
 
     @Test(dataProvider = "forceYield")
     public void testSimpleBlock(boolean forceYield)
-            throws Exception
     {
         Block block = createLongSequenceBlock(0, 100);
         testProject(block, block.getClass(), forceYield);
@@ -78,7 +74,6 @@ public class TestDictionaryAwarePageProjection
 
     @Test(dataProvider = "forceYield")
     public void testRleBlock(boolean forceYield)
-            throws Exception
     {
         Block value = createLongSequenceBlock(42, 43);
         RunLengthEncodedBlock block = new RunLengthEncodedBlock(value, 100);
@@ -88,7 +83,6 @@ public class TestDictionaryAwarePageProjection
 
     @Test(dataProvider = "forceYield")
     public void testRleBlockWithFailure(boolean forceYield)
-            throws Exception
     {
         Block value = createLongSequenceBlock(-43, -42);
         RunLengthEncodedBlock block = new RunLengthEncodedBlock(value, 100);
@@ -98,7 +92,6 @@ public class TestDictionaryAwarePageProjection
 
     @Test(dataProvider = "forceYield")
     public void testDictionaryBlock(boolean forceYield)
-            throws Exception
     {
         DictionaryBlock block = createDictionaryBlock(10, 100);
 
@@ -107,7 +100,6 @@ public class TestDictionaryAwarePageProjection
 
     @Test(dataProvider = "forceYield")
     public void testDictionaryBlockWithFailure(boolean forceYield)
-            throws Exception
     {
         DictionaryBlock block = createDictionaryBlockWithFailure(10, 100);
 
@@ -116,7 +108,6 @@ public class TestDictionaryAwarePageProjection
 
     @Test(dataProvider = "forceYield")
     public void testDictionaryBlockProcessingWithUnusedFailure(boolean forceYield)
-            throws Exception
     {
         DictionaryBlock block = createDictionaryBlockWithUnusedEntries(10, 100);
 
@@ -126,7 +117,6 @@ public class TestDictionaryAwarePageProjection
 
     @Test
     public void testDictionaryProcessingIgnoreYield()
-            throws Exception
     {
         DictionaryAwarePageProjection projection = createProjection();
 
@@ -140,7 +130,6 @@ public class TestDictionaryAwarePageProjection
 
     @Test(dataProvider = "forceYield")
     public void testDictionaryProcessingEnableDisable(boolean forceYield)
-            throws Exception
     {
         DictionaryAwarePageProjection projection = createProjection();
 
@@ -262,7 +251,7 @@ public class TestDictionaryAwarePageProjection
         assertBlockEquals(
                 BIGINT,
                 result,
-                block.copyPositions(new IntArrayList(positions)));
+                block.copyPositions(positions, 0, positions.length));
         assertInstanceOf(result, expectedResultType);
     }
 
@@ -340,7 +329,7 @@ public class TestDictionaryAwarePageProjection
                 this.yieldSignal = yieldSignal;
                 this.block = page.getBlock(0);
                 this.selectedPositions = selectedPositions;
-                this.blockBuilder = BIGINT.createBlockBuilder(new BlockBuilderStatus(), selectedPositions.size());
+                this.blockBuilder = BIGINT.createBlockBuilder(null, selectedPositions.size());
             }
 
             @Override
@@ -351,7 +340,7 @@ public class TestDictionaryAwarePageProjection
                     int offset = selectedPositions.getOffset();
                     int[] positions = selectedPositions.getPositions();
                     for (int index = nextIndexOrPosition + offset; index < offset + selectedPositions.size(); index++) {
-                        blockBuilder.writeLong(verifyPositive(block.getLong(positions[index], 0)));
+                        blockBuilder.writeLong(verifyPositive(block.getLong(positions[index])));
                         if (yieldSignal.isSet()) {
                             nextIndexOrPosition = index + 1 - offset;
                             return false;
@@ -361,7 +350,7 @@ public class TestDictionaryAwarePageProjection
                 else {
                     int offset = selectedPositions.getOffset();
                     for (int position = nextIndexOrPosition + offset; position < offset + selectedPositions.size(); position++) {
-                        blockBuilder.writeLong(verifyPositive(block.getLong(position, 0)));
+                        blockBuilder.writeLong(verifyPositive(block.getLong(position)));
                         if (yieldSignal.isSet()) {
                             nextIndexOrPosition = position + 1 - offset;
                             return false;
@@ -369,7 +358,7 @@ public class TestDictionaryAwarePageProjection
                     }
                 }
                 result = blockBuilder.build();
-                blockBuilder = blockBuilder.newBlockBuilderLike(new BlockBuilderStatus());
+                blockBuilder = blockBuilder.newBlockBuilderLike(null);
                 return true;
             }
 

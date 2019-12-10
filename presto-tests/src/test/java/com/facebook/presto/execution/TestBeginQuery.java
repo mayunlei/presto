@@ -14,8 +14,12 @@
 package com.facebook.presto.execution;
 
 import com.facebook.presto.Session;
+import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ConnectorHandleResolver;
+import com.facebook.presto.spi.ConnectorPageSource;
 import com.facebook.presto.spi.ConnectorSession;
+import com.facebook.presto.spi.ConnectorSplit;
+import com.facebook.presto.spi.ConnectorTableLayoutHandle;
 import com.facebook.presto.spi.FixedPageSource;
 import com.facebook.presto.spi.Plugin;
 import com.facebook.presto.spi.connector.Connector;
@@ -38,10 +42,12 @@ import com.facebook.presto.tests.DistributedQueryRunner;
 import com.facebook.presto.tpch.TpchPlugin;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import org.testng.annotations.AfterClass;
+import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeClass;
-import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -56,7 +62,6 @@ public class TestBeginQuery
     private TestMetadata metadata;
 
     protected TestBeginQuery()
-            throws Exception
     {
         super(TestBeginQuery::createQueryRunner);
     }
@@ -73,7 +78,6 @@ public class TestBeginQuery
 
     @BeforeClass
     public void setUp()
-            throws Exception
     {
         metadata = new TestMetadata();
         getQueryRunner().installPlugin(new TestPlugin(metadata));
@@ -82,23 +86,27 @@ public class TestBeginQuery
         getQueryRunner().createCatalog("tpch", "tpch", ImmutableMap.of());
     }
 
-    @BeforeMethod
-    public void beforeMethod()
-            throws Exception
+    @AfterMethod(alwaysRun = true)
+    public void afterMethod()
     {
         metadata.clear();
     }
 
+    @AfterClass(alwaysRun = true)
+    public void tearDown()
+    {
+        metadata.clear();
+        metadata = null;
+    }
+
     @Test
     public void testCreateTableAsSelect()
-            throws Exception
     {
         assertNoBeginQuery("CREATE TABLE nation AS SELECT * FROM tpch.tiny.nation");
     }
 
     @Test
     public void testCreateTableAsSelectSameConnector()
-            throws Exception
     {
         assertNoBeginQuery("CREATE TABLE nation AS SELECT * FROM tpch.tiny.nation");
         assertBeginQuery("CREATE TABLE nation_copy AS SELECT * FROM nation");
@@ -106,7 +114,6 @@ public class TestBeginQuery
 
     @Test
     public void testInsert()
-            throws Exception
     {
         assertNoBeginQuery("CREATE TABLE nation AS SELECT * FROM tpch.tiny.nation");
         assertBeginQuery("INSERT INTO nation SELECT * FROM tpch.tiny.nation");
@@ -115,7 +122,6 @@ public class TestBeginQuery
 
     @Test
     public void testInsertSelectSameConnector()
-            throws Exception
     {
         assertNoBeginQuery("CREATE TABLE nation AS SELECT * FROM tpch.tiny.nation");
         assertBeginQuery("INSERT INTO nation SELECT * FROM nation");
@@ -123,7 +129,6 @@ public class TestBeginQuery
 
     @Test
     public void testSelect()
-            throws Exception
     {
         assertNoBeginQuery("CREATE TABLE nation AS SELECT * FROM tpch.tiny.nation");
         assertBeginQuery("SELECT * FROM nation");
@@ -175,7 +180,7 @@ public class TestBeginQuery
                 }
 
                 @Override
-                public Connector create(String connectorId, Map<String, String> config, ConnectorContext context)
+                public Connector create(String catalogName, Map<String, String> config, ConnectorContext context)
                 {
                     return new TestConnector(metadata);
                 }
@@ -214,7 +219,13 @@ public class TestBeginQuery
         @Override
         public ConnectorPageSourceProvider getPageSourceProvider()
         {
-            return (transactionHandle, session, split, columns) -> new FixedPageSource(ImmutableList.of());
+            return new ConnectorPageSourceProvider() {
+                @Override
+                public ConnectorPageSource createPageSource(ConnectorTransactionHandle transactionHandle, ConnectorSession session, ConnectorSplit split, ConnectorTableLayoutHandle layout, List<ColumnHandle> columns)
+                {
+                    return new FixedPageSource(ImmutableList.of());
+                }
+            };
         }
 
         @Override

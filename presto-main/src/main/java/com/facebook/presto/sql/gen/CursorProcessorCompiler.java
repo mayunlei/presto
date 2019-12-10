@@ -30,24 +30,23 @@ import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PageBuilder;
 import com.facebook.presto.spi.RecordCursor;
 import com.facebook.presto.spi.block.BlockBuilder;
+import com.facebook.presto.spi.function.SqlFunctionProperties;
+import com.facebook.presto.spi.relation.CallExpression;
+import com.facebook.presto.spi.relation.ConstantExpression;
+import com.facebook.presto.spi.relation.InputReferenceExpression;
+import com.facebook.presto.spi.relation.LambdaDefinitionExpression;
+import com.facebook.presto.spi.relation.RowExpression;
+import com.facebook.presto.spi.relation.RowExpressionVisitor;
+import com.facebook.presto.spi.relation.SpecialFormExpression;
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.gen.LambdaBytecodeGenerator.CompiledLambda;
-import com.facebook.presto.sql.relational.CallExpression;
-import com.facebook.presto.sql.relational.ConstantExpression;
-import com.facebook.presto.sql.relational.InputReferenceExpression;
-import com.facebook.presto.sql.relational.LambdaDefinitionExpression;
-import com.facebook.presto.sql.relational.RowExpression;
-import com.facebook.presto.sql.relational.RowExpressionVisitor;
-import com.facebook.presto.sql.relational.VariableReferenceExpression;
-import com.google.common.base.VerifyException;
-import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.primitives.Primitives;
 import io.airlift.slice.Slice;
 
-import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
+import java.util.Map;
+import java.util.Optional;
 
 import static com.facebook.presto.bytecode.Access.PUBLIC;
 import static com.facebook.presto.bytecode.Access.a;
@@ -57,8 +56,7 @@ import static com.facebook.presto.bytecode.expression.BytecodeExpressions.consta
 import static com.facebook.presto.bytecode.expression.BytecodeExpressions.newInstance;
 import static com.facebook.presto.bytecode.expression.BytecodeExpressions.or;
 import static com.facebook.presto.bytecode.instruction.JumpInstruction.jump;
-import static com.facebook.presto.sql.gen.BytecodeUtils.generateWrite;
-import static com.facebook.presto.sql.gen.LambdaAndTryExpressionExtractor.extractLambdaAndTryExpressions;
+import static com.facebook.presto.sql.gen.LambdaBytecodeGenerator.generateMethodsForLambda;
 import static java.lang.String.format;
 
 public class CursorProcessorCompiler
@@ -72,22 +70,19 @@ public class CursorProcessorCompiler
     }
 
     @Override
-    public void generateMethods(ClassDefinition classDefinition, CallSiteBinder callSiteBinder, RowExpression filter, List<RowExpression> projections)
+    public void generateMethods(SqlFunctionProperties sqlFunctionProperties, ClassDefinition classDefinition, CallSiteBinder callSiteBinder, RowExpression filter, List<RowExpression> projections)
     {
         CachedInstanceBinder cachedInstanceBinder = new CachedInstanceBinder(classDefinition, callSiteBinder);
-        List<PreGeneratedExpressions> allPreGeneratedExpressions = new ArrayList<>(projections.size() + 1);
 
         generateProcessMethod(classDefinition, projections.size());
 
-        PreGeneratedExpressions filterPreGeneratedExpressions = generateMethodsForLambdaAndTry(classDefinition, callSiteBinder, cachedInstanceBinder, filter, "filter");
-        allPreGeneratedExpressions.add(filterPreGeneratedExpressions);
-        generateFilterMethod(classDefinition, callSiteBinder, cachedInstanceBinder, filterPreGeneratedExpressions, filter);
+        Map<LambdaDefinitionExpression, CompiledLambda> filterCompiledLambdaMap = generateMethodsForLambda(classDefinition, callSiteBinder, cachedInstanceBinder, filter, metadata, sqlFunctionProperties, "filter");
+        generateFilterMethod(sqlFunctionProperties, classDefinition, callSiteBinder, cachedInstanceBinder, filterCompiledLambdaMap, filter);
 
         for (int i = 0; i < projections.size(); i++) {
             String methodName = "project_" + i;
-            PreGeneratedExpressions projectPreGeneratedExpressions = generateMethodsForLambdaAndTry(classDefinition, callSiteBinder, cachedInstanceBinder, projections.get(i), methodName);
-            allPreGeneratedExpressions.add(projectPreGeneratedExpressions);
-            generateProjectMethod(classDefinition, callSiteBinder, cachedInstanceBinder, projectPreGeneratedExpressions, methodName, projections.get(i));
+            Map<LambdaDefinitionExpression, CompiledLambda> projectCompiledLambdaMap = generateMethodsForLambda(classDefinition, callSiteBinder, cachedInstanceBinder, projections.get(i), metadata, sqlFunctionProperties, methodName);
+            generateProjectMethod(sqlFunctionProperties, classDefinition, callSiteBinder, cachedInstanceBinder, projectCompiledLambdaMap, methodName, projections.get(i));
         }
 
         MethodDefinition constructorDefinition = classDefinition.declareConstructor(a(PUBLIC));
@@ -98,11 +93,6 @@ public class CursorProcessorCompiler
                 .invokeConstructor(Object.class);
 
         cachedInstanceBinder.generateInitializations(thisVariable, constructorBody);
-        for (PreGeneratedExpressions preGeneratedExpressions : allPreGeneratedExpressions) {
-            for (CompiledLambda compiledLambda : preGeneratedExpressions.getCompiledLambdaMap().values()) {
-                compiledLambda.generateInitialization(thisVariable, constructorBody);
-            }
-        }
         constructorBody.ret();
     }
 
@@ -199,48 +189,12 @@ public class CursorProcessorCompiler
         return ifStatement;
     }
 
-    private PreGeneratedExpressions generateMethodsForLambdaAndTry(
-            ClassDefinition containerClassDefinition,
-            CallSiteBinder callSiteBinder,
-            CachedInstanceBinder cachedInstanceBinder,
-            RowExpression projection,
-            String methodPrefix)
-    {
-        Set<RowExpression> lambdaAndTryExpressions = ImmutableSet.copyOf(extractLambdaAndTryExpressions(projection));
-
-        ImmutableMap.Builder<CallExpression, MethodDefinition> tryMethodMap = ImmutableMap.builder();
-        ImmutableMap.Builder<LambdaDefinitionExpression, CompiledLambda> compiledLambdaMap = ImmutableMap.builder();
-
-        int counter = 0;
-        for (RowExpression expression : lambdaAndTryExpressions) {
-            if (expression instanceof LambdaDefinitionExpression) {
-                LambdaDefinitionExpression lambdaExpression = (LambdaDefinitionExpression) expression;
-                String fieldName = methodPrefix + "_lambda_" + counter;
-                PreGeneratedExpressions preGeneratedExpressions = new PreGeneratedExpressions(tryMethodMap.build(), compiledLambdaMap.build());
-                CompiledLambda compiledLambda = LambdaBytecodeGenerator.preGenerateLambdaExpression(
-                        lambdaExpression,
-                        fieldName,
-                        containerClassDefinition,
-                        preGeneratedExpressions,
-                        callSiteBinder,
-                        cachedInstanceBinder,
-                        metadata.getFunctionRegistry());
-                compiledLambdaMap.put(lambdaExpression, compiledLambda);
-            }
-            else {
-                throw new VerifyException(format("unexpected expression: %s", expression.toString()));
-            }
-            counter++;
-        }
-
-        return new PreGeneratedExpressions(tryMethodMap.build(), compiledLambdaMap.build());
-    }
-
     private void generateFilterMethod(
+            SqlFunctionProperties sqlFunctionProperties,
             ClassDefinition classDefinition,
             CallSiteBinder callSiteBinder,
             CachedInstanceBinder cachedInstanceBinder,
-            PreGeneratedExpressions preGeneratedExpressions,
+            Map<LambdaDefinitionExpression, CompiledLambda> compiledLambdaMap,
             RowExpression filter)
     {
         Parameter session = arg("session", ConnectorSession.class);
@@ -253,18 +207,20 @@ public class CursorProcessorCompiler
         Variable wasNullVariable = scope.declareVariable(type(boolean.class), "wasNull");
 
         RowExpressionCompiler compiler = new RowExpressionCompiler(
+                classDefinition,
                 callSiteBinder,
                 cachedInstanceBinder,
                 fieldReferenceCompiler(cursor),
-                metadata.getFunctionRegistry(),
-                preGeneratedExpressions);
+                metadata,
+                sqlFunctionProperties,
+                compiledLambdaMap);
 
         LabelNode end = new LabelNode("end");
         method.getBody()
                 .comment("boolean wasNull = false;")
                 .putVariable(wasNullVariable, false)
                 .comment("evaluate filter: " + filter)
-                .append(compiler.compile(filter, scope))
+                .append(compiler.compile(filter, scope, Optional.empty()))
                 .comment("if (wasNull) return false;")
                 .getVariable(wasNullVariable)
                 .ifFalseGoto(end)
@@ -275,10 +231,11 @@ public class CursorProcessorCompiler
     }
 
     private void generateProjectMethod(
+            SqlFunctionProperties sqlFunctionProperties,
             ClassDefinition classDefinition,
             CallSiteBinder callSiteBinder,
             CachedInstanceBinder cachedInstanceBinder,
-            PreGeneratedExpressions preGeneratedExpressions,
+            Map<LambdaDefinitionExpression, CompiledLambda> compiledLambdaMap,
             String methodName,
             RowExpression projection)
     {
@@ -293,19 +250,19 @@ public class CursorProcessorCompiler
         Variable wasNullVariable = scope.declareVariable(type(boolean.class), "wasNull");
 
         RowExpressionCompiler compiler = new RowExpressionCompiler(
+                classDefinition,
                 callSiteBinder,
                 cachedInstanceBinder,
                 fieldReferenceCompiler(cursor),
-                metadata.getFunctionRegistry(),
-                preGeneratedExpressions);
+                metadata,
+                sqlFunctionProperties,
+                compiledLambdaMap);
 
         method.getBody()
                 .comment("boolean wasNull = false;")
                 .putVariable(wasNullVariable, false)
-                .getVariable(output)
                 .comment("evaluate projection: " + projection.toString())
-                .append(compiler.compile(projection, scope))
-                .append(generateWrite(callSiteBinder, scope, wasNullVariable, projection.getType()))
+                .append(compiler.compile(projection, scope, Optional.of(output)))
                 .ret();
     }
 
@@ -364,6 +321,12 @@ public class CursorProcessorCompiler
 
             @Override
             public BytecodeNode visitVariableReference(VariableReferenceExpression reference, Scope context)
+            {
+                throw new UnsupportedOperationException();
+            }
+
+            @Override
+            public BytecodeNode visitSpecialForm(SpecialFormExpression specialForm, Scope context)
             {
                 throw new UnsupportedOperationException();
             }

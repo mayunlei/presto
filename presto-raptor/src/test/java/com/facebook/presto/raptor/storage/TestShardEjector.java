@@ -14,8 +14,10 @@
 package com.facebook.presto.raptor.storage;
 
 import com.facebook.presto.client.NodeVersion;
-import com.facebook.presto.metadata.PrestoNode;
+import com.facebook.presto.metadata.InternalNode;
 import com.facebook.presto.raptor.backup.BackupStore;
+import com.facebook.presto.raptor.filesystem.LocalFileStorageService;
+import com.facebook.presto.raptor.filesystem.LocalOrcDataEnvironment;
 import com.facebook.presto.raptor.metadata.ColumnInfo;
 import com.facebook.presto.raptor.metadata.MetadataDao;
 import com.facebook.presto.raptor.metadata.ShardInfo;
@@ -28,6 +30,7 @@ import com.facebook.presto.testing.TestingNodeManager;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import io.airlift.units.Duration;
+import org.apache.hadoop.fs.Path;
 import org.skife.jdbi.v2.DBI;
 import org.skife.jdbi.v2.Handle;
 import org.skife.jdbi.v2.IDBI;
@@ -57,6 +60,7 @@ import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
 
+@Test(singleThreaded = true)
 public class TestShardEjector
 {
     private IDBI dbi;
@@ -67,7 +71,6 @@ public class TestShardEjector
 
     @BeforeMethod
     public void setup()
-            throws Exception
     {
         dbi = new DBI("jdbc:h2:mem:test" + System.nanoTime());
         dummyHandle = dbi.open();
@@ -75,7 +78,7 @@ public class TestShardEjector
         shardManager = createShardManager(dbi);
 
         dataDir = createTempDir();
-        storageService = new FileStorageService(dataDir);
+        storageService = new LocalFileStorageService(new LocalOrcDataEnvironment(), dataDir.toURI());
         storageService.start();
     }
 
@@ -104,6 +107,7 @@ public class TestShardEjector
                 storageService,
                 new Duration(1, HOURS),
                 Optional.of(new TestingBackupStore()),
+                new LocalOrcDataEnvironment(),
                 "test");
 
         List<ShardInfo> shards = ImmutableList.<ShardInfo>builder()
@@ -126,14 +130,14 @@ public class TestShardEjector
         long tableId = createTable("test");
         List<ColumnInfo> columns = ImmutableList.of(new ColumnInfo(1, BIGINT));
 
-        shardManager.createTable(tableId, columns, false, OptionalLong.empty());
+        shardManager.createTable(tableId, columns, false, OptionalLong.empty(), false);
 
         long transactionId = shardManager.beginTransaction();
         shardManager.commitShards(transactionId, tableId, columns, shards, Optional.empty(), 0);
 
         for (ShardInfo shard : shards.subList(0, 8)) {
-            File file = storageService.getStorageFile(shard.getShardUuid());
-            storageService.createParents(file);
+            File file = new File(storageService.getStorageFile(shard.getShardUuid()).toString());
+            storageService.createParents(new Path(file.toURI()));
             assertTrue(file.createNewFile());
         }
 
@@ -152,12 +156,12 @@ public class TestShardEjector
 
         for (UUID uuid : ejectedShards) {
             assertFalse(remaining.contains(uuid));
-            assertFalse(storageService.getStorageFile(uuid).exists());
+            assertFalse(new File(storageService.getStorageFile(uuid).toString()).exists());
         }
 
         assertEquals(remaining, keptShards);
         for (UUID uuid : keptShards) {
-            assertTrue(storageService.getStorageFile(uuid).exists());
+            assertTrue(new File(storageService.getStorageFile(uuid).toString()).exists());
         }
 
         Set<UUID> others = ImmutableSet.<UUID>builder()
@@ -172,7 +176,7 @@ public class TestShardEjector
 
     private long createTable(String name)
     {
-        return dbi.onDemand(MetadataDao.class).insertTable("test", name, false, false, null, 0);
+        return dbi.onDemand(MetadataDao.class).insertTable("test", name, false, false, null, 0, false);
     }
 
     private static Set<UUID> uuids(Set<ShardMetadata> metadata)
@@ -199,7 +203,7 @@ public class TestShardEjector
 
     private static Node createTestingNode(String identifier)
     {
-        return new PrestoNode(identifier, URI.create("http://test"), NodeVersion.UNKNOWN, false);
+        return new InternalNode(identifier, URI.create("http://test"), NodeVersion.UNKNOWN, false);
     }
 
     private static class TestingBackupStore

@@ -42,7 +42,6 @@ public class TestRow
 {
     @Test
     public void testRow()
-            throws Exception
     {
         Row r1 = new Row();
         r1.addField(new Field(AccumuloRowSerializer.getBlockFromArray(VARCHAR, ImmutableList.of("a", "b", "c")), new ArrayType(VARCHAR)));
@@ -69,7 +68,6 @@ public class TestRow
 
     @Test(expectedExceptions = NullPointerException.class, expectedExceptionsMessageRegExp = "type is null")
     public void testRowTypeIsNull()
-            throws Exception
     {
         Row r1 = new Row();
         r1.addField(VARCHAR, null);
@@ -77,7 +75,6 @@ public class TestRow
 
     @Test
     public void testRowFromString()
-            throws Exception
     {
         Row expected = new Row();
         expected.addField(new Field(AccumuloRowSerializer.getBlockFromArray(VARCHAR, ImmutableList.of("a", "b", "c")), new ArrayType(VARCHAR)));
@@ -111,7 +108,7 @@ public class TestRow
         schema.addColumn("m", Optional.of("m"), Optional.of("m"), VARCHAR);
         schema.addColumn("n", Optional.of("n"), Optional.of("n"), VARCHAR);
 
-        Row actual = Row.fromString(schema, "a,b,c|true|1999-01-01|123.45678|123.45678|12345678|12345678|12345|12:30:00|1999-01-01 12:30:00.0|123|O'Leary|O'Leary|", '|');
+        Row actual = Row.fromString(schema, "a,b,c|true|1999-01-01|123.45678|123.45678|12345678|12345678|12345|12:30:00|1999-01-01 12:30:00.000|123|O'Leary|O'Leary|", '|');
         assertEquals(actual, expected);
     }
 }

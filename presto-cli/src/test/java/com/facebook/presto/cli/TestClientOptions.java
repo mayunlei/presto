@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.cli;
 
+import com.facebook.presto.cli.ClientOptions.ClientResourceEstimate;
 import com.facebook.presto.cli.ClientOptions.ClientSessionProperty;
 import com.facebook.presto.client.ClientSession;
 import com.google.common.collect.ImmutableList;
@@ -87,6 +88,27 @@ public class TestClientOptions
     }
 
     @Test
+    public void testResourceEstimates()
+    {
+        Console console = singleCommand(Console.class).parse("--resource-estimate", "resource1=1B", "--resource-estimate", "resource2=2.2h");
+
+        ClientOptions options = console.clientOptions;
+        assertEquals(options.resourceEstimates, ImmutableList.of(
+                new ClientResourceEstimate("resource1", "1B"),
+                new ClientResourceEstimate("resource2", "2.2h")));
+    }
+
+    @Test
+    public void testExtraCredentials()
+    {
+        Console console = singleCommand(Console.class).parse("--extra-credential", "test.token.foo=foo", "--extra-credential", "test.token.bar=bar");
+        ClientOptions options = console.clientOptions;
+        assertEquals(options.extraCredentials, ImmutableList.of(
+                new ClientOptions.ClientExtraCredential("test.token.foo", "foo"),
+                new ClientOptions.ClientExtraCredential("test.token.bar", "bar")));
+    }
+
+    @Test
     public void testSessionProperties()
     {
         Console console = singleCommand(Console.class).parse("--session", "system=system-value", "--session", "catalog.name=catalog-property");
@@ -131,5 +153,13 @@ public class TestClientOptions
     public void testEqualSignNoAllowedInPropertyCatalog()
     {
         new ClientSessionProperty(Optional.of("cat=alog"), "name", "value");
+    }
+
+    @Test(expectedExceptions = IllegalArgumentException.class, expectedExceptionsMessageRegExp = "Multiple entries with same key: test.token.foo=bar and test.token.foo=foo")
+    public void testDuplicateExtraCredentialKey()
+    {
+        Console console = singleCommand(Console.class).parse("--extra-credential", "test.token.foo=foo", "--extra-credential", "test.token.foo=bar");
+        ClientOptions options = console.clientOptions;
+        options.toClientSession();
     }
 }

@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.client;
 
+import com.facebook.airlift.json.ObjectMapperProvider;
 import com.facebook.presto.spi.type.NamedTypeSignature;
 import com.facebook.presto.spi.type.ParameterKind;
 import com.facebook.presto.spi.type.TypeSignatureParameter;
@@ -132,7 +133,7 @@ public class ClientTypeSignatureParameter
     public static class ClientTypeSignatureParameterDeserializer
             extends JsonDeserializer<ClientTypeSignatureParameter>
     {
-        private static final ObjectMapper MAPPER = new ObjectMapper();
+        private static final ObjectMapper MAPPER = new ObjectMapperProvider().get();
 
         @Override
         public ClientTypeSignatureParameter deserialize(JsonParser jp, DeserializationContext ctxt)

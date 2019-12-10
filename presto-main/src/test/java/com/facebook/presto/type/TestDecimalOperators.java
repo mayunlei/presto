@@ -18,14 +18,15 @@ import org.testng.annotations.Test;
 
 import static com.facebook.presto.spi.StandardErrorCode.DIVISION_BY_ZERO;
 import static com.facebook.presto.spi.StandardErrorCode.NUMERIC_VALUE_OUT_OF_RANGE;
+import static com.facebook.presto.spi.function.OperatorType.INDETERMINATE;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
+import static com.facebook.presto.spi.type.DecimalType.createDecimalType;
 
 public class TestDecimalOperators
         extends AbstractTestFunctions
 {
     @Test
     public void testAdd()
-            throws Exception
     {
         // short short -> short
         assertDecimalFunction("DECIMAL '137.7' + DECIMAL '17.1'", decimal("0154.8"));
@@ -81,7 +82,6 @@ public class TestDecimalOperators
 
     @Test
     public void testSubtract()
-            throws Exception
     {
         // short short -> short
         assertDecimalFunction("DECIMAL '107.7' - DECIMAL '17.1'", decimal("0090.6"));
@@ -136,7 +136,6 @@ public class TestDecimalOperators
 
     @Test
     public void testMultiply()
-            throws Exception
     {
         // short short -> short
         assertDecimalFunction("DECIMAL '12' * DECIMAL '3'", decimal("036"));
@@ -180,7 +179,6 @@ public class TestDecimalOperators
 
     @Test
     public void testDivide()
-            throws Exception
     {
         // short short -> short
         assertDecimalFunction("DECIMAL '1' / DECIMAL '3'", decimal("0"));
@@ -244,6 +242,7 @@ public class TestDecimalOperators
         assertDecimalFunction("DECIMAL '9999999999999999999999999999999999999.8' / DECIMAL '9999999999999999999999999999999999999.9'", decimal("0000000000000000000000000000000000001.0"));
         assertDecimalFunction("DECIMAL '9999999999999999999999.9' / DECIMAL '1111111111111111111111.100'", decimal("0000000000000000000000009.000"));
         assertDecimalFunction("CAST('1635619.3155' AS DECIMAL(38,4)) / CAST('47497517.7405' AS DECIMAL(38,4))", decimal("0000000000000000000000000000000000.0344"));
+        assertDecimalFunction("CAST('1000' AS DECIMAL(38,8)) / CAST('25' AS DECIMAL(38,8))", decimal("000000000000000000000000000040.00000000"));
 
         // runtime overflow
         assertInvalidFunction("DECIMAL '12345678901234567890123456789012345678' / DECIMAL '.1'", NUMERIC_VALUE_OUT_OF_RANGE);
@@ -260,7 +259,6 @@ public class TestDecimalOperators
 
     @Test
     public void testModulus()
-            throws Exception
     {
         // short short -> short
         assertDecimalFunction("DECIMAL '1' % DECIMAL '3'", decimal("1"));
@@ -325,7 +323,6 @@ public class TestDecimalOperators
 
     @Test
     public void testNegation()
-            throws Exception
     {
         // short
         assertDecimalFunction("-DECIMAL '1' ", decimal("-1"));
@@ -343,7 +340,6 @@ public class TestDecimalOperators
 
     @Test
     public void testEqual()
-            throws Exception
     {
         // short short
         assertFunction("DECIMAL '37' = DECIMAL '37'", BOOLEAN, true);
@@ -388,7 +384,6 @@ public class TestDecimalOperators
 
     @Test
     public void testNotEqual()
-            throws Exception
     {
         // short short
         assertFunction("DECIMAL '37' != DECIMAL '37'", BOOLEAN, false);
@@ -434,7 +429,6 @@ public class TestDecimalOperators
 
     @Test
     public void testLessThan()
-            throws Exception
     {
         // short short
         assertFunction("DECIMAL '37' < DECIMAL '37'", BOOLEAN, false);
@@ -487,7 +481,6 @@ public class TestDecimalOperators
 
     @Test
     public void testGreaterThan()
-            throws Exception
     {
         // short short
         assertFunction("DECIMAL '37' > DECIMAL '37'", BOOLEAN, false);
@@ -540,7 +533,6 @@ public class TestDecimalOperators
 
     @Test
     public void testLessThanOrEqual()
-            throws Exception
     {
         // short short
         assertFunction("DECIMAL '37' <= DECIMAL '36'", BOOLEAN, false);
@@ -593,7 +585,6 @@ public class TestDecimalOperators
 
     @Test
     public void testGreaterThanOrEqual()
-            throws Exception
     {
         // short short
         assertFunction("DECIMAL '37' >= DECIMAL '38'", BOOLEAN, false);
@@ -646,7 +637,6 @@ public class TestDecimalOperators
 
     @Test
     public void testBetween()
-            throws Exception
     {
         // short short short
         assertFunction("DECIMAL '1' BETWEEN DECIMAL '-5' AND DECIMAL '5'", BOOLEAN, true);
@@ -692,7 +682,6 @@ public class TestDecimalOperators
 
     @Test
     public void testAddDecimalBigint()
-            throws Exception
     {
         // decimal + bigint
         assertDecimalFunction("DECIMAL '123456789012345678' + 123456789012345678", decimal("00246913578024691356"));
@@ -707,7 +696,6 @@ public class TestDecimalOperators
 
     @Test
     public void testSubtractDecimalBigint()
-            throws Exception
     {
         // decimal - bigint
         assertDecimalFunction("DECIMAL '1234567890123456789' - 1234567890123456789", decimal("00000000000000000000"));
@@ -722,7 +710,6 @@ public class TestDecimalOperators
 
     @Test
     public void testMultiplyDecimalBigint()
-            throws Exception
     {
         // decimal bigint
         assertDecimalFunction("DECIMAL '12345678901234567' * 12345678901234567", decimal("000152415787532388345526596755677489"));
@@ -739,7 +726,6 @@ public class TestDecimalOperators
 
     @Test
     public void testDivideDecimalBigint()
-            throws Exception
     {
         // bigint / decimal
         assertDecimalFunction("BIGINT '9' / DECIMAL '3.0'", decimal("00000000000000000003.0"));
@@ -755,7 +741,6 @@ public class TestDecimalOperators
 
     @Test
     public void testModulusDecimalBigint()
-            throws Exception
     {
         // bigint % decimal
         assertDecimalFunction("BIGINT '13' % DECIMAL '9.0'", decimal("4.0"));
@@ -770,12 +755,97 @@ public class TestDecimalOperators
 
     @Test
     public void testIsDistinctFrom()
-            throws Exception
     {
         assertFunction("CAST(NULL AS DECIMAL) IS DISTINCT FROM CAST(NULL AS DECIMAL)", BOOLEAN, false);
         assertFunction("DECIMAL '37' IS DISTINCT FROM DECIMAL '37'", BOOLEAN, false);
         assertFunction("37 IS DISTINCT FROM 38", BOOLEAN, true);
         assertFunction("NULL IS DISTINCT FROM 37", BOOLEAN, true);
         assertFunction("37 IS DISTINCT FROM NULL", BOOLEAN, true);
+
+        // short short
+        assertFunction("DECIMAL '-2' IS DISTINCT FROM DECIMAL '-3'", BOOLEAN, true);
+        assertFunction("DECIMAL '-2' IS DISTINCT FROM CAST(NULL AS DECIMAL(1,0))", BOOLEAN, true);
+        assertFunction("CAST(NULL AS DECIMAL(2,0)) IS DISTINCT FROM CAST(NULL AS DECIMAL(1,0))", BOOLEAN, false);
+        assertFunction("DECIMAL '-2' IS DISTINCT FROM DECIMAL '-2'", BOOLEAN, false);
+        assertFunction("CAST(NULL AS DECIMAL(1,0)) IS DISTINCT FROM DECIMAL '-2'", BOOLEAN, true);
+
+        // long long
+        assertFunction("DECIMAL '12345678901234567.89012345678901234567' IS DISTINCT FROM DECIMAL '12345678901234567.8902345678901234567'", BOOLEAN, true);
+        assertFunction("DECIMAL '12345678901234567.89012345678901234567' IS DISTINCT FROM CAST(NULL AS DECIMAL(36,1))", BOOLEAN, true);
+        assertFunction("CAST(NULL AS DECIMAL(36,1)) IS DISTINCT FROM CAST(NULL AS DECIMAL(27,3))", BOOLEAN, false);
+        assertFunction("DECIMAL '-12345678901234567.89012345678901234567' IS DISTINCT FROM DECIMAL '-12345678901234567.89012345678901234567'", BOOLEAN, false);
+        assertFunction("CAST(NULL AS DECIMAL(36,1)) IS DISTINCT FROM DECIMAL '12345678901234567.89012345678901234567'", BOOLEAN, true);
+
+        // short long
+        assertFunction("DECIMAL '12345678901234567.89012345678901234567' IS DISTINCT FROM DECIMAL '-3'", BOOLEAN, true);
+        assertFunction("DECIMAL '12345678901234567.89012345678901234567' IS DISTINCT FROM CAST(NULL AS DECIMAL(1,0))", BOOLEAN, true);
+        assertFunction("CAST(NULL AS DECIMAL(36,1)) IS DISTINCT FROM CAST(NULL AS DECIMAL(1,0))", BOOLEAN, false);
+        assertFunction("DECIMAL '00000000000000007.80000000000000000000' IS DISTINCT FROM DECIMAL '7.8'", BOOLEAN, false);
+        assertFunction("CAST(NULL AS DECIMAL(36,1)) IS DISTINCT FROM DECIMAL '7.8'", BOOLEAN, true);
+
+        // with unknown
+        assertFunction("NULL IS DISTINCT FROM DECIMAL '-2'", BOOLEAN, true);
+        assertFunction("DECIMAL '-2' IS DISTINCT FROM NULL", BOOLEAN, true);
+        assertFunction("NULL IS DISTINCT FROM DECIMAL '12345678901234567.89012345678901234567'", BOOLEAN, true);
+        assertFunction("DECIMAL '12345678901234567.89012345678901234567' IS DISTINCT FROM NULL", BOOLEAN, true);
+
+        // delegation from other operator (exercises block-position convention implementation)
+        assertFunction("ARRAY [1.23, 4.56] IS DISTINCT FROM ARRAY [1.23, 4.56]", BOOLEAN, false);
+        assertFunction("ARRAY [1.23, NULL] IS DISTINCT FROM ARRAY [1.23, 4.56]", BOOLEAN, true);
+        assertFunction("ARRAY [1.23, NULL] IS DISTINCT FROM ARRAY [NULL, 4.56]", BOOLEAN, true);
+        assertFunction("ARRAY [1234567890.123456789, 9876543210.987654321] IS DISTINCT FROM ARRAY [1234567890.123456789, 9876543210.987654321]", BOOLEAN, false);
+        assertFunction("ARRAY [1234567890.123456789, NULL] IS DISTINCT FROM ARRAY [1234567890.123456789, 9876543210.987654321]", BOOLEAN, true);
+        assertFunction("ARRAY [1234567890.123456789, NULL] IS DISTINCT FROM ARRAY [NULL, 9876543210.987654321]", BOOLEAN, true);
+    }
+
+    @Test
+    public void testNullIf()
+    {
+        // short short
+        assertDecimalFunction("nullif(DECIMAL '-2', DECIMAL '-3')", decimal("-2"));
+        assertDecimalFunction("nullif(DECIMAL '-2', CAST(NULL AS DECIMAL(1,0)))", decimal("-2"));
+        assertFunction("nullif(DECIMAL '-2', DECIMAL '-2')", createDecimalType(1, 0), null);
+        assertFunction("nullif(CAST(NULL AS DECIMAL(1,0)), DECIMAL '-2')", createDecimalType(1, 0), null);
+        assertFunction("nullif(CAST(NULL AS DECIMAL(1,0)), CAST(NULL AS DECIMAL(1,0)))", createDecimalType(1, 0), null);
+
+        // long long
+        assertDecimalFunction("nullif(DECIMAL '12345678901234567.89012345678901234567', DECIMAL '12345678901234567.8902345678901234567')", decimal("12345678901234567.89012345678901234567"));
+        assertDecimalFunction("nullif(DECIMAL '12345678901234567.89012345678901234567', CAST(NULL AS DECIMAL(36,1)))", decimal("12345678901234567.89012345678901234567"));
+        assertFunction("nullif(DECIMAL '12345678901234567.89012345678901234567', DECIMAL '12345678901234567.89012345678901234567')", createDecimalType(37, 20), null);
+        assertFunction("nullif(CAST(NULL AS DECIMAL(38,0)), DECIMAL '12345678901234567.89012345678901234567')", createDecimalType(38, 0), null);
+        assertFunction("nullif(CAST(NULL AS DECIMAL(38,0)), CAST(NULL AS DECIMAL(38,0)))", createDecimalType(38, 0), null);
+
+        // short long
+        assertDecimalFunction("nullif(DECIMAL '12345678901234567.89012345678901234567', DECIMAL '-3')", decimal("12345678901234567.89012345678901234567"));
+        assertDecimalFunction("nullif(DECIMAL '12345678901234567.89012345678901234567', CAST(NULL AS DECIMAL(1,0)))", decimal("12345678901234567.89012345678901234567"));
+        assertFunction("nullif(DECIMAL '12345678901234567.89012345678901234567', DECIMAL '12345678901234567.89012345678901234567')", createDecimalType(37, 20), null);
+        assertFunction("nullif(CAST(NULL AS DECIMAL(1,0)), DECIMAL '12345678901234567.89012345678901234567')", createDecimalType(1, 0), null);
+
+        // with unknown
+        assertFunction("nullif(NULL, NULL)", UnknownType.UNKNOWN, null);
+        assertFunction("nullif(NULL, DECIMAL '-2')", UnknownType.UNKNOWN, null);
+        assertDecimalFunction("nullif(DECIMAL '-2', NULL)", decimal("-2"));
+        assertFunction("nullif(NULL, DECIMAL '12345678901234567.89012345678901234567')", UnknownType.UNKNOWN, null);
+        assertDecimalFunction("nullif(DECIMAL '12345678901234567.89012345678901234567', NULL)", decimal("12345678901234567.89012345678901234567"));
+    }
+
+    @Test
+    public void testCoalesce()
+    {
+        assertDecimalFunction("coalesce(2.1, null, cast(null as decimal(5,3)))", decimal("02.100"));
+        assertFunction("coalesce(cast(null as decimal(17,3)), null, cast(null as decimal(12,3)))", createDecimalType(17, 3), null);
+        assertDecimalFunction("coalesce(3, 2.1, null, cast(null as decimal(6,3)))", decimal("0000000003.000"));
+        assertFunction("coalesce(cast(null as decimal(17,3)), null, cast(null as decimal(12,3)))", createDecimalType(17, 3), null);
+    }
+
+    @Test
+    public void testIndeterminate()
+    {
+        assertOperator(INDETERMINATE, "cast(null as DECIMAL)", BOOLEAN, true);
+        assertOperator(INDETERMINATE, "cast(null as DECIMAL(37,3))", BOOLEAN, true);
+        assertOperator(INDETERMINATE, "DECIMAL '.999'", BOOLEAN, false);
+        assertOperator(INDETERMINATE, "DECIMAL '18'", BOOLEAN, false);
+        assertOperator(INDETERMINATE, "DECIMAL '9.0'", BOOLEAN, false);
+        assertOperator(INDETERMINATE, "DECIMAL '12345678901234567.89012345678901234567'", BOOLEAN, false);
     }
 }

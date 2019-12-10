@@ -19,6 +19,8 @@ import java.util.Optional;
 
 public interface HiveFileWriter
 {
+    long getWrittenBytes();
+
     long getSystemMemoryUsage();
 
     void appendRows(Page dataPage);
@@ -26,6 +28,8 @@ public interface HiveFileWriter
     void commit();
 
     void rollback();
+
+    long getValidationCpuNanos();
 
     default Optional<Runnable> getVerificationTask()
     {
